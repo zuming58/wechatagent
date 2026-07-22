@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# Local application data
+.env
+.env.*
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local AI and connector caches
+.wx-cli/
+.ollama/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# WorkBuddy local state
+.workbuddy/
