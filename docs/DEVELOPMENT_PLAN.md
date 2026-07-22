@@ -1,7 +1,9 @@
 # wechatagent 开发实施文档
 
-> 关联需求：[PRD-001](prd/PRD-001.md)  
-> 状态：进入 Phase 0 技术 PoC 与 UI Demo  
+> 关联需求：[PRD-001](prd/PRD-001.md)
+>
+> 状态：进入 Phase 0 技术 PoC 与 UI Demo
+>
 > 日期：2026-07-22
 
 ## 1. 技术结论
