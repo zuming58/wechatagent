@@ -16,6 +16,13 @@
 - [开发实施文档](docs/DEVELOPMENT_PLAN.md)
 - [旧版技术可行性分析](docs/technical-feasibility.md)（仅供历史参考）
 
+## UI Demo
+
+- 路径：`prototypes/ui-demo`
+- 技术：React + Vite + Phosphor Icons
+- 已实现：联系人筛选与切换、关系总览、聊天证据、待办交互、AI 建议确认/忽略、原文上下文、头像同步规则说明
+- 本地运行：在 Demo 目录执行 `npm run dev`
+
 ## 重要边界
 
 个人微信没有面向普通第三方的稳定全量历史 API。数据采集层必须作为可替换适配器存在；产品不承诺获取手机端每一条消息，也不承诺永久兼容所有微信版本。

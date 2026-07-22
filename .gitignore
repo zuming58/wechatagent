@@ -27,3 +27,6 @@ Thumbs.db
 
 # WorkBuddy local state
 .workbuddy/
+
+# Local preview process output
+.preview-*.log
