@@ -10,6 +10,7 @@ vi.mock("./api", async () => {
       contacts: vi.fn(),
       contactMessages: vi.fn(),
       facts: vi.fn(),
+      factHistory: vi.fn(),
       createFact: vi.fn(),
       updateFact: vi.fn(),
       deleteFact: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type Contact, type Fact, type Message, type MessageContext, type SourceStatus } from "./api";
+import { api, LocalApiError, type Contact, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -39,6 +40,7 @@ function renderWithSource(source: SourceStatus, data: {
   contacts?: Contact[];
   evidence?: Message[];
   facts?: Fact[];
+  history?: FactHistoryEvent[];
   search?: Message[];
   context?: MessageContext;
 } = {}) {
@@ -46,6 +48,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
   mockedApi.contactMessages.mockResolvedValue(data.evidence ?? []);
   mockedApi.facts.mockResolvedValue(data.facts ?? []);
+  mockedApi.factHistory.mockResolvedValue(data.history ?? []);
   mockedApi.createFact.mockImplementation(async (_contactId, accountId, payload) => ({ id: "new-fact", account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
   mockedApi.updateFact.mockImplementation(async (factId, accountId, payload) => ({ id: factId, account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
   mockedApi.deleteFact.mockResolvedValue(undefined);
@@ -263,5 +266,26 @@ describe("multi-account sync safety gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加事实" }));
     fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
     expect(screen.queryByLabelText("内容")).not.toBeInTheDocument();
+  });
+
+  it("shows local fact history, opens evidence context, and clears it for another contact", async () => {
+    const first = { id: "contact-zhang", display_name: "First Contact", last_message_at: null };
+    const second = { id: "contact-chen", display_name: "Second Contact", last_message_at: null };
+    const evidence = { id: "history-message", conversation_id: "private-1", conversation_name: "First Contact", conversation_type: "private", sender_display_name: "First Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "History source", snippet: "History source" };
+    const history: FactHistoryEvent[] = [{ id: "history-delete", account_id: "account-b", contact_id: first.id, fact_id: "fact-deleted", event_type: "deleted", kind: "need", content: "Deleted local fact", occurred_at: "2026-07-23T12:01:00Z", evidence: [evidence] }];
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [first, second], evidence: [evidence], history, context: { anchor_id: evidence.id, messages: [evidence] } });
+
+    const historyButton = await screen.findByRole("button", { name: "事实历史" });
+    await waitFor(() => expect(historyButton).toBeEnabled());
+    fireEvent.click(historyButton);
+    await waitFor(() => expect(mockedApi.factHistory).toHaveBeenCalledWith("contact-zhang", "account-b"));
+    expect(await screen.findByRole("heading", { name: "事实历史" })).toBeInTheDocument();
+    expect(screen.getByText("已删除 · 需求")).toBeInTheDocument();
+    expect(screen.getByText("Deleted local fact")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "原文证据 1 条" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("history-message"));
+    fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
+    expect(screen.queryByRole("heading", { name: "事实历史" })).not.toBeInTheDocument();
   });
 });

@@ -380,6 +380,22 @@ def test_contact_facts_are_manual_traceable_and_survive_sync(client):
     remaining = client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()
     assert [item["id"] for item in remaining] == [manual.json()["id"]]
 
+    history = client.get(f"/api/v1/contacts/{zhang['id']}/fact-history", params={"account_id": "dev-account"})
+    assert history.status_code == 200
+    assert {item["event_type"] for item in history.json()} == {"created", "updated", "deleted"}
+    assert len(history.json()) == 4
+    assert history.json()[0]["event_type"] == "deleted"
+    deleted_event = next(item for item in history.json() if item["event_type"] == "deleted")
+    assert deleted_event["fact_id"] == evidenced.json()["id"]
+    assert [item["id"] for item in deleted_event["evidence"]] == [zhang_messages[0]["id"]]
+    updated_event = next(item for item in history.json() if item["event_type"] == "updated")
+    assert updated_event["content"] == "Updated synthetic commitment"
+    assert [item["id"] for item in updated_event["evidence"]] == [zhang_messages[1]["id"]]
+    assert len(client.get(f"/api/v1/contacts/{zhang['id']}/fact-history", params={"account_id": "dev-account", "limit": 2}).json()) == 2
+    assert client.get(f"/api/v1/contacts/{chen['id']}/fact-history", params={"account_id": "dev-account"}).json() == []
+    assert client.get(f"/api/v1/contacts/{zhang['id']}/fact-history", params={"account_id": "another-account"}).status_code == 404
+
     repeated_sync = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     assert repeated_sync.status_code == 200
     assert client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()[0]["content"] == "Updated synthetic commitment"
+    assert len(client.get(f"/api/v1/contacts/{zhang['id']}/fact-history", params={"account_id": "dev-account"}).json()) == 4

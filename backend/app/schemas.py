@@ -84,3 +84,15 @@ class FactResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     evidence: list[MessageSearchItem]
+
+
+class FactHistoryResponse(BaseModel):
+    id: str
+    account_id: str
+    contact_id: str
+    fact_id: str
+    event_type: str
+    kind: str
+    content: str
+    occurred_at: datetime
+    evidence: list[MessageSearchItem]

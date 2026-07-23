@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, selectinload
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Contact, Conversation, Fact, FactMessageEvidence, Message, SyncRun
-from .schemas import AccountSummary, ContactResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
+from .models import Contact, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
+from .schemas import AccountSummary, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
 from .services.sync import SyncService
 
 
@@ -62,6 +62,36 @@ def fact_response(fact: Fact) -> FactResponse:
         updated_at=fact.updated_at,
         evidence=[message_item(link.message, link.message.conversation) for link in fact.evidence],
     )
+
+
+def fact_history_response(event: FactHistoryEvent) -> FactHistoryResponse:
+    return FactHistoryResponse(
+        id=event.id,
+        account_id=event.account_id,
+        contact_id=event.contact_id,
+        fact_id=event.fact_id,
+        event_type=event.event_type,
+        kind=event.kind,
+        content=event.content,
+        occurred_at=event.occurred_at,
+        evidence=[message_item(link.message, link.message.conversation) for link in event.evidence],
+    )
+
+
+def record_fact_history(db: Session, fact: Fact, event_type: str, evidence: list[Message]) -> None:
+    event = FactHistoryEvent(
+        id=str(uuid.uuid4()),
+        account_id=fact.account_id,
+        contact_id=fact.contact_id,
+        fact_id=fact.id,
+        event_type=event_type,
+        kind=fact.kind,
+        content=fact.content,
+    )
+    db.add(event)
+    db.flush()
+    for message in evidence:
+        db.add(FactHistoryMessageEvidence(id=str(uuid.uuid4()), event_id=event.id, message_id=message.id))
 
 
 def account_contact_or_404(db: Session, contact_id: str, account_id: str) -> Contact:
@@ -209,6 +239,23 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         ).all()
         return [fact_response(fact) for fact in facts]
 
+    @app.get("/api/v1/contacts/{contact_id}/fact-history", response_model=list[FactHistoryResponse])
+    def list_contact_fact_history(
+        contact_id: str,
+        account_id: str,
+        limit: int = Query(100, ge=1, le=500),
+        db: Session = Depends(get_db),
+    ) -> list[FactHistoryResponse]:
+        account_contact_or_404(db, contact_id, account_id)
+        events = db.scalars(
+            select(FactHistoryEvent)
+            .where(FactHistoryEvent.account_id == account_id, FactHistoryEvent.contact_id == contact_id)
+            .options(selectinload(FactHistoryEvent.evidence).selectinload(FactHistoryMessageEvidence.message).selectinload(Message.conversation))
+            .order_by(FactHistoryEvent.occurred_at.desc(), FactHistoryEvent.id.desc())
+            .limit(limit)
+        ).all()
+        return [fact_history_response(event) for event in events]
+
     @app.post("/api/v1/contacts/{contact_id}/facts", response_model=FactResponse, status_code=201)
     def create_contact_fact(contact_id: str, request: FactWriteRequest, account_id: str, db: Session = Depends(get_db)) -> FactResponse:
         contact = account_contact_or_404(db, contact_id, account_id)
@@ -221,6 +268,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         db.flush()
         for message in evidence:
             db.add(FactMessageEvidence(id=str(uuid.uuid4()), fact_id=fact.id, message_id=message.id))
+        record_fact_history(db, fact, "created", evidence)
         db.commit()
         fact = db.scalar(
             select(Fact).where(Fact.id == fact.id)
@@ -243,6 +291,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         db.query(FactMessageEvidence).filter(FactMessageEvidence.fact_id == fact.id).delete()
         for message in evidence:
             db.add(FactMessageEvidence(id=str(uuid.uuid4()), fact_id=fact.id, message_id=message.id))
+        record_fact_history(db, fact, "updated", evidence)
         db.commit()
         fact = db.scalar(
             select(Fact).where(Fact.id == fact.id)
@@ -252,9 +301,14 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
 
     @app.delete("/api/v1/facts/{fact_id}", status_code=204)
     def delete_fact(fact_id: str, account_id: str, db: Session = Depends(get_db)) -> None:
-        fact = db.scalar(select(Fact).where(Fact.id == fact_id, Fact.account_id == account_id))
+        fact = db.scalar(
+            select(Fact)
+            .where(Fact.id == fact_id, Fact.account_id == account_id)
+            .options(selectinload(Fact.evidence).selectinload(FactMessageEvidence.message))
+        )
         if not fact:
             raise HTTPException(status_code=404, detail="fact_not_found")
+        record_fact_history(db, fact, "deleted", [link.message for link in fact.evidence])
         db.delete(fact)
         db.commit()
 

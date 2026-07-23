@@ -24,6 +24,17 @@ export type Fact = {
   evidence: Message[];
 };
 export type FactWrite = { kind: FactKind; content: string; message_ids: string[] };
+export type FactHistoryEvent = {
+  id: string;
+  account_id: string;
+  contact_id: string;
+  fact_id: string;
+  event_type: "created" | "updated" | "deleted";
+  kind: FactKind;
+  content: string;
+  occurred_at: string;
+  evidence: Message[];
+};
 
 export class LocalApiError extends Error {
   constructor(public readonly status: number, public readonly errorCode?: string, public readonly reason?: string) {
@@ -48,6 +59,7 @@ export const api = {
   contacts: (accountId: string, query = "") => request<Contact[]>(`/contacts?account_id=${encodeURIComponent(accountId)}&query=${encodeURIComponent(query)}`),
   contactMessages: (contactId: string, accountId: string) => request<Message[]>(`/contacts/${encodeURIComponent(contactId)}/messages?account_id=${encodeURIComponent(accountId)}`),
   facts: (contactId: string, accountId: string) => request<Fact[]>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`),
+  factHistory: (contactId: string, accountId: string) => request<FactHistoryEvent[]>(`/contacts/${encodeURIComponent(contactId)}/fact-history?account_id=${encodeURIComponent(accountId)}`),
   createFact: (contactId: string, accountId: string, payload: FactWrite) => request<Fact>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
   updateFact: (factId: string, accountId: string, payload: FactWrite) => request<Fact>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteFact: (factId: string, accountId: string) => request<void>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),

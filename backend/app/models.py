@@ -114,6 +114,38 @@ class FactMessageEvidence(Base):
     message: Mapped[Message] = relationship()
 
 
+class FactHistoryEvent(Base):
+    __tablename__ = "fact_history_events"
+    __table_args__ = (
+        Index("ix_fact_history_account_contact_occurred", "account_id", "contact_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    fact_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    evidence: Mapped[list["FactHistoryMessageEvidence"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+
+
+class FactHistoryMessageEvidence(Base):
+    __tablename__ = "fact_history_message_evidence"
+    __table_args__ = (
+        UniqueConstraint("event_id", "message_id", name="uq_fact_history_message_evidence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("fact_history_events.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+
+    event: Mapped[FactHistoryEvent] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)
