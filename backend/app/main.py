@@ -88,6 +88,16 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
 
     @app.post("/api/v1/sync", response_model=SyncRunResponse)
     def start_sync(request: SyncRequest, db: Session = Depends(get_db)) -> SyncRun:
+        probe = app.state.connector.probe()
+        if probe.status != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "failed",
+                    "error_code": probe.status,
+                    "reason": probe.reason,
+                },
+            )
         service = SyncService(app.state.connector, app.state.settings.sync_overlap_seconds)
         return service.run(db, request.account_id, request.mode, request.limit_sessions)
 

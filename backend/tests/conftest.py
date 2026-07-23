@@ -21,6 +21,7 @@ def client() -> Generator[TestClient, None, None]:
         TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
         settings = Settings(database_url=f"sqlite:///{database_path}", connector="synthetic")
         app = create_app(settings=settings, connector=SyntheticConnector())
+        app.state.testing_session_factory = TestingSession
 
         def override_db():
             session = TestingSession()

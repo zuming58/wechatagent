@@ -15,6 +15,16 @@ def stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]}"
 
 
+def is_later(candidate: datetime, current: datetime | None, *, inclusive: bool = False) -> bool:
+    if current is None:
+        return True
+    if candidate.tzinfo is not None and current.tzinfo is None:
+        current = current.replace(tzinfo=candidate.tzinfo)
+    elif candidate.tzinfo is None and current.tzinfo is not None:
+        candidate = candidate.replace(tzinfo=current.tzinfo)
+    return candidate >= current if inclusive else candidate > current
+
+
 class SyncService:
     def __init__(self, connector: Connector, overlap_seconds: int = 300) -> None:
         self.connector = connector
@@ -24,6 +34,8 @@ class SyncService:
         if mode == "initial":
             return None
         latest = session.scalar(select(SyncShard.latest_source_at).where(SyncShard.account_id == account_id).order_by(SyncShard.latest_source_at.desc()))
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
         return latest - timedelta(seconds=self.overlap_seconds) if latest else None
 
     def run(self, session: Session, account_id: str, mode: str = "incremental", limit_sessions: int | None = None) -> SyncRun:
@@ -84,12 +96,25 @@ class SyncService:
             conversation_map[source.source_id] = conversation
 
         session.flush()
+        contacts_by_source_id = {
+            contact.source_id: contact
+            for contact in session.scalars(select(Contact).where(Contact.account_id == batch.account.id))
+        }
         inserted = 0
         duplicates = 0
+        committed_shards: set[str] = set()
         for source in batch.messages:
+            # A private conversation is identified by its contact source ID.  A
+            # group message can only update a contact that was already imported.
+            contact_source_id = source.conversation_source_id if source.conversation_type == "private" else source.sender_id if source.conversation_type == "group" else None
+            contact = contacts_by_source_id.get(contact_source_id) if contact_source_id else None
+            if contact and is_later(source.sent_at, contact.last_message_at):
+                contact.last_message_at = source.sent_at
+
             message_id = stable_id("message", batch.account.id, source.source_shard_id, source.source_message_id)
             if session.get(Message, message_id):
                 duplicates += 1
+                committed_shards.add(source.source_shard_id)
                 continue
             conversation = conversation_map.get(source.conversation_source_id)
             if not conversation:
@@ -118,15 +143,23 @@ class SyncService:
             session.flush()
             session.execute(text("INSERT INTO messages_fts(message_id, account_id, conversation_id, text_content) VALUES (:id, :account, :conversation, :content)"), {"id": message.id, "account": message.account_id, "conversation": message.conversation_id, "content": message.text_content})
             inserted += 1
+            committed_shards.add(source.source_shard_id)
 
-        for shard_id, watermark in batch.watermark_by_shard.items():
+        # Watermarks are transactionally advanced only for shards whose source
+        # messages were durably written (or were confirmed existing duplicates).
+        for shard_id in committed_shards:
+            watermark = batch.watermark_by_shard.get(shard_id)
+            latest_source_at = batch.latest_by_shard.get(shard_id)
+            if watermark is None or latest_source_at is None:
+                continue
             shard_key = stable_id("shard", batch.account.id, shard_id)
             shard = session.get(SyncShard, shard_key)
             if not shard:
                 shard = SyncShard(id=shard_key, account_id=batch.account.id, source_shard_id=shard_id)
                 session.add(shard)
-            shard.watermark = watermark
-            shard.latest_source_at = batch.latest_by_shard.get(shard_id)
-            shard.freshness_status = batch.freshness_status
+            if is_later(latest_source_at, shard.latest_source_at, inclusive=True):
+                shard.watermark = watermark
+                shard.latest_source_at = latest_source_at
+                shard.freshness_status = batch.freshness_status
         session.commit()
         return inserted, duplicates
