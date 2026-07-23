@@ -97,6 +97,29 @@ def test_source_status_and_initial_sync(client):
     assert contacts.json()[2]["last_message_at"] is None
 
 
+def test_sync_warning_preserves_counts_and_freshness_code(client):
+    sent_at = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    batch = ConnectorBatch(
+        account=FixedBatchConnector.account,
+        contacts=[StandardContact("warning-contact")],
+        conversations=[StandardConversation("warning-contact", "Warning", "private", sent_at)],
+        messages=[StandardMessage("warning-shard", "warning-message", "warning-contact", "Warning", "private", "warning-contact", "Warning", sent_at, "incoming", "text", "synthetic warning message")],
+        watermark_by_shard={"warning-shard": sent_at.isoformat()},
+        latest_by_shard={"warning-shard": sent_at},
+        freshness_status="unknown_shards",
+        unknown_shards=["synthetic-missing-shard"],
+    )
+    client.app.state.connector = FixedBatchConnector(batch)
+
+    response = client.post("/api/v1/sync", json={"account_id": "fixed-account", "mode": "initial"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed_with_warning"
+    assert response.json()["inserted_count"] == 1
+    assert response.json()["duplicate_count"] == 0
+    assert response.json()["error_code"] == "unknown_shards"
+
+
 def test_idempotent_import_and_search_context(client):
     counts = []
     for _ in range(3):

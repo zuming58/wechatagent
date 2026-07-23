@@ -113,4 +113,28 @@ describe("multi-account sync safety gate", () => {
 
     expect(await screen.findByText(/409.*account_not_available.*Choose a detected account/)).toBeInTheDocument();
   });
+
+  it("shows an incomplete-data warning without exposing shard identifiers", async () => {
+    renderWithSource(sourceStatus({
+      accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }],
+      unknown_shards: ["synthetic-shard-a", "synthetic-shard-b"],
+    }));
+
+    expect(await screen.findByText("数据范围不完整：有 2 个未纳入的数据分片。")).toBeInTheDocument();
+    expect(screen.queryByText("synthetic-shard-a")).not.toBeInTheDocument();
+    expect(syncButtons()[0]).toBeEnabled();
+  });
+
+  it("distinguishes completed-with-warning and failed sync responses", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }));
+    mockedApi.sync.mockResolvedValueOnce({ id: "warning-run", status: "completed_with_warning", inserted_count: 2, duplicate_count: 1, error_code: "possibly_stale" });
+    mockedApi.sync.mockResolvedValueOnce({ id: "failed-run", status: "failed", inserted_count: 0, duplicate_count: 0, error_code: "connector_missing" });
+
+    await waitFor(() => expect(syncButtons()[0]).toBeEnabled());
+    fireEvent.click(syncButtons()[0]);
+    expect(await screen.findByText(/同步已完成，但数据质量警告.*possibly_stale.*新增 2 条，重复 1 条/)).toBeInTheDocument();
+
+    fireEvent.click(syncButtons()[0]);
+    expect(await screen.findByText("同步未完成（connector_missing）。")).toBeInTheDocument();
+  });
 });
