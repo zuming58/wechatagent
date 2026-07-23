@@ -12,6 +12,18 @@ export type Contact = { id: string; display_name: string; company?: string | nul
 export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
 export type MessageContext = { anchor_id: string; messages: Message[] };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
+export type FactKind = "company" | "role" | "need" | "concern" | "commitment";
+export type Fact = {
+  id: string;
+  account_id: string;
+  contact_id: string;
+  kind: FactKind;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  evidence: Message[];
+};
+export type FactWrite = { kind: FactKind; content: string; message_ids: string[] };
 
 export class LocalApiError extends Error {
   constructor(public readonly status: number, public readonly errorCode?: string, public readonly reason?: string) {
@@ -27,6 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const payload = await response.json().catch(() => null) as { detail?: { error_code?: string; reason?: string } } | null;
     throw new LocalApiError(response.status, payload?.detail?.error_code, payload?.detail?.reason);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -34,6 +47,10 @@ export const api = {
   sourceStatus: () => request<SourceStatus>("/source/status"),
   contacts: (accountId: string, query = "") => request<Contact[]>(`/contacts?account_id=${encodeURIComponent(accountId)}&query=${encodeURIComponent(query)}`),
   contactMessages: (contactId: string, accountId: string) => request<Message[]>(`/contacts/${encodeURIComponent(contactId)}/messages?account_id=${encodeURIComponent(accountId)}`),
+  facts: (contactId: string, accountId: string) => request<Fact[]>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`),
+  createFact: (contactId: string, accountId: string, payload: FactWrite) => request<Fact>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
+  updateFact: (factId: string, accountId: string, payload: FactWrite) => request<Fact>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteFact: (factId: string, accountId: string) => request<void>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
   search: (accountId: string, query: string) => request<Message[]>(`/messages/search?account_id=${encodeURIComponent(accountId)}&q=${encodeURIComponent(query)}`),
   messageContext: (messageId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context`),
   sync: (accountId: string, mode: "initial" | "incremental" = "incremental") => request<SyncRun>("/sync", { method: "POST", body: JSON.stringify({ account_id: accountId, mode }) }),

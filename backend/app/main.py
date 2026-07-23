@@ -1,16 +1,17 @@
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Contact, Conversation, Message, SyncRun
-from .schemas import AccountSummary, ContactResponse, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
+from .models import Contact, Conversation, Fact, FactMessageEvidence, Message, SyncRun
+from .schemas import AccountSummary, ContactResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
 from .services.sync import SyncService
 
 
@@ -48,6 +49,46 @@ def message_item(message: Message, conversation: Conversation, snippet: str | No
         text_content=message.text_content,
         snippet=snippet or message.text_content,
     )
+
+
+def fact_response(fact: Fact) -> FactResponse:
+    return FactResponse(
+        id=fact.id,
+        account_id=fact.account_id,
+        contact_id=fact.contact_id,
+        kind=fact.kind,
+        content=fact.content,
+        created_at=fact.created_at,
+        updated_at=fact.updated_at,
+        evidence=[message_item(link.message, link.message.conversation) for link in fact.evidence],
+    )
+
+
+def account_contact_or_404(db: Session, contact_id: str, account_id: str) -> Contact:
+    contact = db.scalar(select(Contact).where(Contact.id == contact_id, Contact.account_id == account_id))
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact_not_found")
+    return contact
+
+
+def fact_evidence_or_422(db: Session, contact: Contact, account_id: str, message_ids: list[str]) -> list[Message]:
+    if not message_ids:
+        return []
+    unique_ids = list(dict.fromkeys(message_ids))
+    messages = list(db.scalars(
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Message.id.in_(unique_ids), Message.account_id == account_id)
+    ))
+    if len(messages) != len(unique_ids):
+        raise HTTPException(status_code=422, detail="fact_evidence_message_not_found")
+    for message in messages:
+        conversation = message.conversation
+        is_private_evidence = conversation.conversation_type == "private" and conversation.source_id == contact.source_id
+        is_group_evidence = conversation.conversation_type == "group" and message.sender_id == contact.source_id
+        if not is_private_evidence and not is_group_evidence:
+            raise HTTPException(status_code=422, detail="fact_evidence_message_not_allowed")
+    return messages
 
 
 def create_app(settings: Settings | None = None, connector: Connector | None = None) -> FastAPI:
@@ -140,9 +181,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         limit: int = Query(100, ge=1, le=500),
         db: Session = Depends(get_db),
     ) -> list[MessageSearchItem]:
-        contact = db.scalar(select(Contact).where(Contact.id == contact_id, Contact.account_id == account_id))
-        if not contact:
-            raise HTTPException(status_code=404, detail="contact_not_found")
+        contact = account_contact_or_404(db, contact_id, account_id)
 
         statement = (
             select(Message, Conversation)
@@ -158,6 +197,66 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             .limit(limit)
         )
         return [message_item(message, conversation) for message, conversation in db.execute(statement).all()]
+
+    @app.get("/api/v1/contacts/{contact_id}/facts", response_model=list[FactResponse])
+    def list_contact_facts(contact_id: str, account_id: str, db: Session = Depends(get_db)) -> list[FactResponse]:
+        account_contact_or_404(db, contact_id, account_id)
+        facts = db.scalars(
+            select(Fact)
+            .where(Fact.account_id == account_id, Fact.contact_id == contact_id)
+            .options(selectinload(Fact.evidence).selectinload(FactMessageEvidence.message).selectinload(Message.conversation))
+            .order_by(Fact.updated_at.desc(), Fact.id.desc())
+        ).all()
+        return [fact_response(fact) for fact in facts]
+
+    @app.post("/api/v1/contacts/{contact_id}/facts", response_model=FactResponse, status_code=201)
+    def create_contact_fact(contact_id: str, request: FactWriteRequest, account_id: str, db: Session = Depends(get_db)) -> FactResponse:
+        contact = account_contact_or_404(db, contact_id, account_id)
+        evidence = fact_evidence_or_422(db, contact, account_id, request.message_ids)
+        content = request.content.strip()
+        if not content:
+            raise HTTPException(status_code=422, detail="fact_content_required")
+        fact = Fact(id=str(uuid.uuid4()), account_id=account_id, contact_id=contact.id, kind=request.kind, content=content)
+        db.add(fact)
+        db.flush()
+        for message in evidence:
+            db.add(FactMessageEvidence(id=str(uuid.uuid4()), fact_id=fact.id, message_id=message.id))
+        db.commit()
+        fact = db.scalar(
+            select(Fact).where(Fact.id == fact.id)
+            .options(selectinload(Fact.evidence).selectinload(FactMessageEvidence.message).selectinload(Message.conversation))
+        )
+        return fact_response(fact)
+
+    @app.patch("/api/v1/facts/{fact_id}", response_model=FactResponse)
+    def update_fact(fact_id: str, request: FactWriteRequest, account_id: str, db: Session = Depends(get_db)) -> FactResponse:
+        fact = db.scalar(select(Fact).where(Fact.id == fact_id, Fact.account_id == account_id))
+        if not fact:
+            raise HTTPException(status_code=404, detail="fact_not_found")
+        contact = account_contact_or_404(db, fact.contact_id, account_id)
+        evidence = fact_evidence_or_422(db, contact, account_id, request.message_ids)
+        content = request.content.strip()
+        if not content:
+            raise HTTPException(status_code=422, detail="fact_content_required")
+        fact.kind = request.kind
+        fact.content = content
+        db.query(FactMessageEvidence).filter(FactMessageEvidence.fact_id == fact.id).delete()
+        for message in evidence:
+            db.add(FactMessageEvidence(id=str(uuid.uuid4()), fact_id=fact.id, message_id=message.id))
+        db.commit()
+        fact = db.scalar(
+            select(Fact).where(Fact.id == fact.id)
+            .options(selectinload(Fact.evidence).selectinload(FactMessageEvidence.message).selectinload(Message.conversation))
+        )
+        return fact_response(fact)
+
+    @app.delete("/api/v1/facts/{fact_id}", status_code=204)
+    def delete_fact(fact_id: str, account_id: str, db: Session = Depends(get_db)) -> None:
+        fact = db.scalar(select(Fact).where(Fact.id == fact_id, Fact.account_id == account_id))
+        if not fact:
+            raise HTTPException(status_code=404, detail="fact_not_found")
+        db.delete(fact)
+        db.commit()
 
     @app.get("/api/v1/messages/search", response_model=list[MessageSearchItem])
     def search_messages(

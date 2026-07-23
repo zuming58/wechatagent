@@ -67,3 +67,20 @@ class MessageSearchItem(BaseModel):
 class MessageContextResponse(BaseModel):
     anchor_id: str
     messages: list[MessageSearchItem]
+
+
+class FactWriteRequest(BaseModel):
+    kind: str = Field(pattern="^(company|role|need|concern|commitment)$")
+    content: str = Field(min_length=1, max_length=2000)
+    message_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class FactResponse(BaseModel):
+    id: str
+    account_id: str
+    contact_id: str
+    kind: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+    evidence: list[MessageSearchItem]

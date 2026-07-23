@@ -9,6 +9,10 @@ vi.mock("./api", async () => {
       sourceStatus: vi.fn(),
       contacts: vi.fn(),
       contactMessages: vi.fn(),
+      facts: vi.fn(),
+      createFact: vi.fn(),
+      updateFact: vi.fn(),
+      deleteFact: vi.fn(),
       search: vi.fn(),
       messageContext: vi.fn(),
       sync: vi.fn(),
@@ -17,7 +21,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type Contact, type Message, type MessageContext, type SourceStatus } from "./api";
+import { api, LocalApiError, type Contact, type Fact, type Message, type MessageContext, type SourceStatus } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -34,12 +38,17 @@ function sourceStatus(overrides: Partial<SourceStatus> = {}): SourceStatus {
 function renderWithSource(source: SourceStatus, data: {
   contacts?: Contact[];
   evidence?: Message[];
+  facts?: Fact[];
   search?: Message[];
   context?: MessageContext;
 } = {}) {
   mockedApi.sourceStatus.mockResolvedValue(source);
   mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
   mockedApi.contactMessages.mockResolvedValue(data.evidence ?? []);
+  mockedApi.facts.mockResolvedValue(data.facts ?? []);
+  mockedApi.createFact.mockImplementation(async (_contactId, accountId, payload) => ({ id: "new-fact", account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
+  mockedApi.updateFact.mockImplementation(async (factId, accountId, payload) => ({ id: factId, account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
+  mockedApi.deleteFact.mockResolvedValue(undefined);
   mockedApi.search.mockResolvedValue(data.search ?? []);
   mockedApi.messageContext.mockResolvedValue(data.context ?? { anchor_id: "synthetic-message", messages: [] });
   mockedApi.sync.mockResolvedValue({ id: "synthetic-run", status: "completed", inserted_count: 0, duplicate_count: 0 });
@@ -206,5 +215,53 @@ describe("multi-account sync safety gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
     await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("search-message"));
     expect(await screen.findByText("消息上下文")).toBeInTheDocument();
+  });
+
+  it("creates a manual fact and labels it as a user record", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact] });
+
+    const addFact = await screen.findByRole("button", { name: "添加事实" });
+    await waitFor(() => expect(addFact).toBeEnabled());
+    fireEvent.click(addFact);
+    fireEvent.change(screen.getByLabelText("内容"), { target: { value: "Confirmed manually" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存事实" }));
+
+    await waitFor(() => expect(mockedApi.createFact).toHaveBeenCalledWith("contact-zhang", "account-b", { kind: "company", content: "Confirmed manually", message_ids: [] }));
+    expect(await screen.findByText("用户手动记录")).toBeInTheDocument();
+  });
+
+  it("uses a selected evidence message for a new fact and opens its context", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const evidence = { id: "evidence-message", conversation_id: "private-1", conversation_name: "Synthetic Contact", conversation_type: "private", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "Traceable source", snippet: "Traceable source" };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], evidence: [evidence], context: { anchor_id: evidence.id, messages: [evidence] } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "聊天证据" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用于新事实" }));
+    fireEvent.change(screen.getByLabelText("内容"), { target: { value: "Confirmed with evidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存事实" }));
+
+    await waitFor(() => expect(mockedApi.createFact).toHaveBeenCalledWith("contact-zhang", "account-b", { kind: "company", content: "Confirmed with evidence", message_ids: ["evidence-message"] }));
+    fireEvent.click(await screen.findByRole("button", { name: "原文证据 1 条" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("evidence-message"));
+  });
+
+  it("edits, deletes, and clears an unfinished fact when the contact changes", async () => {
+    const first = { id: "contact-zhang", display_name: "First Contact", last_message_at: null };
+    const second = { id: "contact-chen", display_name: "Second Contact", last_message_at: null };
+    const fact: Fact = { id: "fact-1", account_id: "account-b", contact_id: first.id, kind: "need", content: "Original fact", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: [] };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [first, second], facts: [fact] });
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("内容"), { target: { value: "Updated fact" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(mockedApi.updateFact).toHaveBeenCalledWith("fact-1", "account-b", { kind: "need", content: "Updated fact", message_ids: [] }));
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(mockedApi.deleteFact).toHaveBeenCalledWith("fact-1", "account-b"));
+
+    fireEvent.click(screen.getByRole("button", { name: "添加事实" }));
+    fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
+    expect(screen.queryByLabelText("内容")).not.toBeInTheDocument();
   });
 });

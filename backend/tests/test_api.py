@@ -309,3 +309,77 @@ def test_sync_rejects_unknown_account_even_when_source_is_ready(client):
     assert response.status_code == 409
     assert response.json()["detail"]["error_code"] == "account_not_available"
     assert connector.collect_calls == 0
+
+
+def test_contact_facts_are_manual_traceable_and_survive_sync(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contacts = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()
+    zhang = next(item for item in contacts if item["source_id"] == "wxid_zhang")
+    chen = next(item for item in contacts if item["source_id"] == "wxid_chen")
+    zhang_messages = client.get(f"/api/v1/contacts/{zhang['id']}/messages", params={"account_id": "dev-account"}).json()
+    chen_messages = client.get(f"/api/v1/contacts/{chen['id']}/messages", params={"account_id": "dev-account"}).json()
+
+    manual = client.post(
+        f"/api/v1/contacts/{zhang['id']}/facts",
+        params={"account_id": "dev-account"},
+        json={"kind": "company", "content": "Synthetic company record", "message_ids": []},
+    )
+    assert manual.status_code == 201
+    assert manual.json()["evidence"] == []
+
+    evidenced = client.post(
+        f"/api/v1/contacts/{zhang['id']}/facts",
+        params={"account_id": "dev-account"},
+        json={"kind": "need", "content": "Synthetic offline deployment need", "message_ids": [zhang_messages[0]["id"]]},
+    )
+    assert evidenced.status_code == 201
+    assert [item["id"] for item in evidenced.json()["evidence"]] == [zhang_messages[0]["id"]]
+
+    listed = client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"})
+    assert listed.status_code == 200
+    assert {item["id"] for item in listed.json()} == {manual.json()["id"], evidenced.json()["id"]}
+
+    updated = client.patch(
+        f"/api/v1/facts/{manual.json()['id']}",
+        params={"account_id": "dev-account"},
+        json={"kind": "commitment", "content": "Updated synthetic commitment", "message_ids": [zhang_messages[1]["id"]]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["kind"] == "commitment"
+    assert [item["id"] for item in updated.json()["evidence"]] == [zhang_messages[1]["id"]]
+    updated_listing = client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()
+    assert updated_listing[0]["id"] == manual.json()["id"]
+
+    invalid_create = client.post(
+        f"/api/v1/contacts/{zhang['id']}/facts",
+        params={"account_id": "dev-account"},
+        json={"kind": "role", "content": "Must not persist", "message_ids": [chen_messages[0]["id"]]},
+    )
+    assert invalid_create.status_code == 422
+    assert invalid_create.json()["detail"] == "fact_evidence_message_not_allowed"
+    assert len(client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()) == 2
+
+    invalid_update = client.patch(
+        f"/api/v1/facts/{manual.json()['id']}",
+        params={"account_id": "dev-account"},
+        json={"kind": "role", "content": "Must not alter", "message_ids": [chen_messages[0]["id"]]},
+    )
+    assert invalid_update.status_code == 422
+    unchanged = client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()
+    assert next(item for item in unchanged if item["id"] == manual.json()["id"])["content"] == "Updated synthetic commitment"
+
+    assert client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "another-account"}).status_code == 404
+    assert client.post(
+        f"/api/v1/contacts/{zhang['id']}/facts",
+        params={"account_id": "another-account"},
+        json={"kind": "role", "content": "Other account", "message_ids": []},
+    ).status_code == 404
+
+    deleted = client.delete(f"/api/v1/facts/{evidenced.json()['id']}", params={"account_id": "dev-account"})
+    assert deleted.status_code == 204
+    remaining = client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()
+    assert [item["id"] for item in remaining] == [manual.json()["id"]]
+
+    repeated_sync = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    assert repeated_sync.status_code == 200
+    assert client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()[0]["content"] == "Updated synthetic commitment"

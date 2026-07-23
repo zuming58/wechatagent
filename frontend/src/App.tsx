@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type Contact, type Message, type MessageContext, type SourceStatus, type SyncRun } from "./api";
+import { api, LocalApiError, type Contact, type Fact, type FactKind, type FactWrite, type Message, type MessageContext, type SourceStatus, type SyncRun } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
+const factKindLabels: Record<FactKind, string> = {
+  company: "公司",
+  role: "角色",
+  need: "需求",
+  concern: "顾虑",
+  commitment: "承诺",
+};
+const emptyFact = (): FactWrite => ({ kind: "company", content: "", message_ids: [] });
 
 function avatar(contact: Contact) {
   return contact.avatar_ref ? <img src={contact.avatar_ref} alt="" /> : <span>{contact.display_name.slice(0, 1)}</span>;
@@ -29,10 +37,15 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<Message[]>([]);
   const [evidence, setEvidence] = useState<Message[]>([]);
+  const [facts, setFacts] = useState<Fact[]>([]);
+  const [factDraft, setFactDraft] = useState<FactWrite | null>(null);
+  const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [context, setContext] = useState<MessageContext | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [factsLoading, setFactsLoading] = useState(false);
+  const [factSaving, setFactSaving] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
@@ -71,7 +84,10 @@ export function App() {
   }, [accountId, query, sourceCanSync]);
 
   useEffect(() => {
-    if (activeTab !== "evidence" || !selected || !accountId) return;
+    if (!selected || !accountId) {
+      setEvidence([]);
+      return;
+    }
     let active = true;
     setEvidenceLoading(true);
     api.contactMessages(selected.id, accountId)
@@ -79,7 +95,21 @@ export function App() {
       .catch(() => active && setNotice("聊天证据读取失败。"))
       .finally(() => active && setEvidenceLoading(false));
     return () => { active = false; };
-  }, [activeTab, accountId, selected?.id]);
+  }, [accountId, selected?.id]);
+
+  useEffect(() => {
+    if (!selected || !accountId) {
+      setFacts([]);
+      return;
+    }
+    let active = true;
+    setFactsLoading(true);
+    api.facts(selected.id, accountId)
+      .then((items) => active && setFacts(items))
+      .catch(() => active && setNotice("已确认事实读取失败。"))
+      .finally(() => active && setFactsLoading(false));
+    return () => { active = false; };
+  }, [accountId, selected?.id]);
 
   async function sync(mode: "initial" | "incremental") {
     if (!canSync) return;
@@ -116,14 +146,64 @@ export function App() {
   function selectContact(contact: Contact) {
     setSelected(contact);
     setContext(null);
+    setFactDraft(null);
+    setEditingFactId(null);
   }
 
-  const messageRows = (items: Message[], emptyCopy: string) => {
+  function beginFact(message?: Message) {
+    setActiveTab("overview");
+    setEditingFactId(null);
+    setFactDraft({ ...emptyFact(), message_ids: message ? [message.id] : [] });
+  }
+
+  function editFact(fact: Fact) {
+    setEditingFactId(fact.id);
+    setFactDraft({ kind: fact.kind, content: fact.content, message_ids: fact.evidence.map((item) => item.id) });
+  }
+
+  function toggleFactEvidence(messageId: string) {
+    setFactDraft((current) => {
+      if (!current) return current;
+      const included = current.message_ids.includes(messageId);
+      return { ...current, message_ids: included ? current.message_ids.filter((id) => id !== messageId) : [...current.message_ids, messageId] };
+    });
+  }
+
+  async function saveFact() {
+    if (!selected || !accountId || !factDraft || !factDraft.content.trim()) return;
+    setFactSaving(true);
+    try {
+      const saved = editingFactId
+        ? await api.updateFact(editingFactId, accountId, { ...factDraft, content: factDraft.content.trim() })
+        : await api.createFact(selected.id, accountId, { ...factDraft, content: factDraft.content.trim() });
+      setFacts((current) => editingFactId ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
+      setFactDraft(null);
+      setEditingFactId(null);
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `事实未保存（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查原文证据。"}` : "事实未保存，请检查本地 API 状态。");
+    } finally { setFactSaving(false); }
+  }
+
+  async function removeFact(factId: string) {
+    if (!accountId) return;
+    try {
+      await api.deleteFact(factId, accountId);
+      setFacts((current) => current.filter((item) => item.id !== factId));
+      if (editingFactId === factId) {
+        setFactDraft(null);
+        setEditingFactId(null);
+      }
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `事实未删除（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查账号。"}` : "事实未删除，请检查本地 API 状态。");
+    }
+  }
+
+  const messageRows = (items: Message[], emptyCopy: string, canUseForFact = false) => {
     if (!items.length && !evidenceLoading) return <p className="empty-message">{emptyCopy}</p>;
     return items.map((item) => <article className="message-row" key={item.id}>
       <div><strong>{item.conversation_name}</strong><span>{item.sender_display_name} · {item.conversation_type === "group" ? "群聊" : "私聊"} · {item.message_type}</span></div>
       <p>{item.text_content}</p>
-      <footer><time>{formatMessageTime(item.sent_at)}</time><button className="link" onClick={() => showContext(item)}>查看上下文</button></footer>
+      <footer><time>{formatMessageTime(item.sent_at)}</time><span><button className="link" onClick={() => showContext(item)}>查看上下文</button>{canUseForFact && <button className="link" onClick={() => beginFact(item)}>用于新事实</button>}</span></footer>
     </article>);
   };
 
@@ -144,10 +224,10 @@ export function App() {
       <div className="tabs"><button className={activeTab === "overview" ? "active" : ""} aria-selected={activeTab === "overview"} onClick={() => setActiveTab("overview")}>关系总览</button><button className={activeTab === "evidence" ? "active" : ""} aria-selected={activeTab === "evidence"} onClick={() => setActiveTab("evidence")}>聊天证据</button><button disabled>待办事项</button><button disabled>标签与备注</button></div>
       <div className="content">
         {activeTab === "overview" && <>
-          <section className="card confirmed"><h2><CheckCircle weight="fill" />已确认的事实</h2><p>关系事实仍需要用户确认；当前工作台只展示可追溯的原文证据。</p><ul><li>联系人身份由账号标识与稳定内部标识绑定。</li><li>头像变化仅更新缓存，不会产生新联系人。</li><li>原始消息落库成功后才推进同步水位。</li></ul></section>
+          <section className="card confirmed"><header className="card-heading"><h2><CheckCircle weight="fill" />已确认的事实</h2><button className="link" disabled={!selected} onClick={() => beginFact()}>添加事实</button></header><p>仅由用户手动记录或确认；系统不会从聊天自动推断事实。</p>{factDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveFact(); }}><label>类型<select value={factDraft.kind} onChange={(event) => setFactDraft({ ...factDraft, kind: event.target.value as FactKind })}>{Object.entries(factKindLabels).map(([kind, label]) => <option value={kind} key={kind}>{label}</option>)}</select></label><label>内容<textarea value={factDraft.content} onChange={(event) => setFactDraft({ ...factDraft, content: event.target.value })} placeholder="输入用户确认的内容" maxLength={2000} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={factDraft.message_ids.includes(message.id)} onChange={() => toggleFactEvidence(message.id)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>无原文证据时将标记为“用户手动记录”。</p>}</fieldset><footer><button type="button" className="link" onClick={() => { setFactDraft(null); setEditingFactId(null); }}>取消</button><button className="primary" type="submit" disabled={factSaving || !factDraft.content.trim()}>{factSaving ? "保存中…" : editingFactId ? "保存修改" : "保存事实"}</button></footer></form>}{factsLoading ? <p className="empty-message">正在读取已确认事实…</p> : !facts.length ? <p className="empty-message">尚无已确认事实。可手动记录，或从聊天证据添加原文关联。</p> : <div className="fact-list">{facts.map((fact) => <article className="fact-row" key={fact.id}><div><strong>{factKindLabels[fact.kind]}</strong><time>更新于 {formatMessageTime(fact.updated_at)}</time></div><p>{fact.content}</p><footer>{fact.evidence.length ? <button className="link" onClick={() => showContext(fact.evidence[0])}>原文证据 {fact.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => editFact(fact)}>编辑</button><button className="link danger" onClick={() => void removeFact(fact.id)}>删除</button></span></footer></article>)}</div>}</section>
           <section className="card ai"><h2><ChatCircleDots weight="fill" />原文搜索</h2><div className="search-results"><label className="inline-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search}>搜索</button></label>{messageRows(results, "输入关键词后可查看原文命中与上下文。")}</div></section>
         </>}
-        {activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。")}</div></section>}
+        {activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。", true)}</div></section>}
         {context && <section className="card context-card"><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}
         <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}<p>{contextLoading ? "正在读取消息上下文…" : notice || "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
       </div>

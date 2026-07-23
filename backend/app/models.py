@@ -82,6 +82,38 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship()
 
 
+class Fact(Base):
+    __tablename__ = "facts"
+    __table_args__ = (
+        Index("ix_fact_account_contact_updated", "account_id", "contact_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    evidence: Mapped[list["FactMessageEvidence"]] = relationship(back_populates="fact", cascade="all, delete-orphan")
+
+
+class FactMessageEvidence(Base):
+    __tablename__ = "fact_message_evidence"
+    __table_args__ = (
+        UniqueConstraint("fact_id", "message_id", name="uq_fact_message_evidence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fact_id: Mapped[str] = mapped_column(ForeignKey("facts.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    fact: Mapped[Fact] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)
