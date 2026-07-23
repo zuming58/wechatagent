@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import func, select, text
 
 from app.connectors.base import Connector, ConnectorBatch, SourceAccount, SourceProbe, StandardContact, StandardConversation, StandardMessage
@@ -17,11 +18,12 @@ class RecordingSyntheticConnector(SyntheticConnector):
 
 
 class NotReadyConnector(Connector):
-    def __init__(self):
+    def __init__(self, status="connector_missing"):
+        self.status = status
         self.collect_calls = 0
 
     def probe(self):
-        return SourceProbe(status="connector_missing", reason="Synthetic test connector is unavailable")
+        return SourceProbe(status=self.status, reason="Synthetic test connector is unavailable")
 
     def collect(self, account_id, since, limit_sessions=None):
         self.collect_calls += 1
@@ -33,13 +35,44 @@ class FixedBatchConnector(Connector):
 
     def __init__(self, batch):
         self.batch = batch
+        self.collect_calls = 0
 
     def probe(self):
         return SourceProbe(status="ready", accounts=[self.account])
 
     def collect(self, account_id, since, limit_sessions=None):
+        self.collect_calls += 1
         assert account_id == self.account.id
         return self.batch
+
+
+class AccountSelectionConnector(Connector):
+    accounts = [
+        SourceAccount(id="account-a", source_key="synthetic:account-a", display_name="Account A"),
+        SourceAccount(id="account-b", source_key="synthetic:account-b", display_name="Account B"),
+    ]
+
+    def __init__(self):
+        self.collect_calls = []
+
+    def probe(self):
+        return SourceProbe(
+            status="account_selection_required",
+            accounts=self.accounts,
+            reason="Choose the local account to archive.",
+        )
+
+    def collect(self, account_id, since, limit_sessions=None):
+        self.collect_calls.append(account_id)
+        account = next(account for account in self.accounts if account.id == account_id)
+        return ConnectorBatch(
+            account=account,
+            contacts=[],
+            conversations=[],
+            messages=[],
+            watermark_by_shard={},
+            latest_by_shard={},
+        )
 
 
 def database_session(client):
@@ -166,15 +199,58 @@ def test_incremental_overlap_is_idempotent_and_watermark_requires_message_commit
         assert session.scalar(select(func.count(SyncShard.id))) == 1
 
 
-def test_sync_rejects_non_ready_connector_without_collecting(client):
-    connector = NotReadyConnector()
+@pytest.mark.parametrize(
+    "status",
+    ["connector_missing", "permission_denied", "unsupported_version", "wechat_offline", "unexpected_status"],
+)
+def test_sync_rejects_unavailable_connector_without_collecting(client, status):
+    connector = NotReadyConnector(status)
     client.app.state.connector = connector
 
     response = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     assert response.status_code == 409
     assert response.json()["detail"] == {
         "status": "failed",
-        "error_code": "connector_missing",
+        "error_code": status,
         "reason": "Synthetic test connector is unavailable",
     }
+    assert connector.collect_calls == 0
+
+
+def test_sync_requires_an_explicit_detected_account_for_account_selection(client):
+    connector = AccountSelectionConnector()
+    client.app.state.connector = connector
+
+    unselected = client.post("/api/v1/sync", json={"account_id": "", "mode": "initial"})
+    assert unselected.status_code == 409
+    assert unselected.json()["detail"]["error_code"] == "account_not_available"
+    assert connector.collect_calls == []
+
+    unknown = client.post("/api/v1/sync", json={"account_id": "unknown-account", "mode": "initial"})
+    assert unknown.status_code == 409
+    assert unknown.json()["detail"]["error_code"] == "account_not_available"
+    assert connector.collect_calls == []
+
+    selected = client.post("/api/v1/sync", json={"account_id": "account-b", "mode": "initial"})
+    assert selected.status_code == 200
+    assert selected.json()["status"] == "completed"
+    assert connector.collect_calls == ["account-b"]
+
+
+def test_sync_rejects_unknown_account_even_when_source_is_ready(client):
+    connector = FixedBatchConnector(
+        ConnectorBatch(
+            account=FixedBatchConnector.account,
+            contacts=[],
+            conversations=[],
+            messages=[],
+            watermark_by_shard={},
+            latest_by_shard={},
+        )
+    )
+    client.app.state.connector = connector
+
+    response = client.post("/api/v1/sync", json={"account_id": "unknown-account", "mode": "initial"})
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "account_not_available"
     assert connector.collect_calls == 0

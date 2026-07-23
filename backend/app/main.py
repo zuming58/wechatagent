@@ -89,13 +89,22 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
     @app.post("/api/v1/sync", response_model=SyncRunResponse)
     def start_sync(request: SyncRequest, db: Session = Depends(get_db)) -> SyncRun:
         probe = app.state.connector.probe()
-        if probe.status != "ready":
+        if probe.status not in {"ready", "account_selection_required"}:
             raise HTTPException(
                 status_code=409,
                 detail={
                     "status": "failed",
                     "error_code": probe.status,
                     "reason": probe.reason,
+                },
+            )
+        if request.account_id not in {account.id for account in probe.accounts}:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "failed",
+                    "error_code": "account_not_available",
+                    "reason": "Select one of the accounts currently detected on this device.",
                 },
             )
         service = SyncService(app.state.connector, app.state.settings.sync_overlap_seconds)
