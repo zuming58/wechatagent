@@ -10,10 +10,11 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Confirmed design direction
 
-- Source visual: the third generated “关系记忆工作台” direction, refined after user selection.
+- Source visual: `reference/relationship-workbench-final-bright-blue.png`. It is the only implementation target; older green, dark-navy, and gray-blue references are historical context only.
 - Preserve a three-pane desktop information architecture: light module navigation, searchable contact list, and a large relationship workspace.
-- Overall tone must be bright, simple, and immediately understandable for WeChat-heavy professional use.
-- Use subtle semantic surface tints to distinguish modules: pale mint for confirmed facts, pale blue for AI suggestions, pale warm yellow for needs, pale lavender/cool gray for tasks, and white for the evidence timeline.
+- Overall tone must be bright, simple, and designed, with no dusty gray-blue or foggy cast.
+- Use a very light neutral-gray main navigation with a slim vivid-blue brand stripe. Use #1677FF for active navigation, primary actions, active tabs, links, and selection indicators. Keep the contact column cool white/light sky and the relationship workspace predominantly pure white.
+- Preserve semantic color: confirmed facts and sync success green, AI suggestions ice blue, needs pale warm yellow, tasks pale lavender, and evidence white. Do not use gradients or a full-height dark-blue navigation wall.
 - Keep shadows minimal, borders soft, and saturated color limited to state meaning and primary actions.
 - Demo must support core interactions: contact selection, tabs, search, confirming/ignoring AI suggestions, completing tasks, and opening evidence context.
 - Avatar handling is not a manual profile-maintenance feature: render the latest locally cached WeChat avatar when available, fall back to the display-name initial, refresh automatically during incremental sync, and identify contacts by a stable internal WeChat-derived key rather than avatar, nickname, or real name.
