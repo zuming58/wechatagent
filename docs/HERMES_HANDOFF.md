@@ -21,12 +21,12 @@
 ## 3. 当前基线（交接前）
 
 - 分支：`agent/ui-demo`
-- 基线提交：`ff7ed85 feat: start local relationship memory application`
+- 基线提交：`359219b3879cd39fe56db89108c21ad741c9447b`
 - UI Demo：`prototypes/ui-demo/`，亮蓝版已通过 `design-qa.md` 验收。
 - 后端：`backend/`，FastAPI + SQLite + SQLAlchemy + Alembic + FTS5(trigram)。
 - 正式前端：`frontend/`，React + TypeScript，已接通合成数据的状态、首次归档、联系人和原文搜索。
-- 已通过：`backend/.venv/Scripts/python.exe -m pytest -q`（3 项）；`npm run build`（`frontend/`）；`npm run build && npm run test:sites`（`prototypes/ui-demo/`）。
-- 实机只读探测结果：微信 `4.1.11.24`、发现两个账号目录、`wx-cli` 未安装；当前必须显示 `connector_missing`，未读取任何真实聊天内容。
+- DEV-001 已完成同步闭环与自动化测试；DEV-002 已完成并通过审计，多账号必须由用户显式选择。
+- 当前真实采集状态必须保持 `connector_missing`。未安装或执行 `wx-cli`，未读取、解密、导入或上传任何真实微信聊天数据；Go/No-Go 真实验证尚未获执行授权。
 
 ## 4. 标准工作流
 
@@ -62,27 +62,20 @@
 - <commit hash；若未提交，说明原因>
 ```
 
-## 6. 当前发给 Hermes 的任务：DEV-001
+## 6. 当前发给 Hermes 的任务：DEV-003
 
 > 以下区块是给用户复制给 Hermes 的原文。
 
 ```text
-你在 F:\WorkBuddy\wechatagent 项目中实现 DEV-001。请先阅读 docs\HERMES_HANDOFF.md，并严格遵守其中的安全与视觉边界。
+你在 F:\WorkBuddy\wechatagent 项目中实现 DEV-003。请先阅读 docs\HERMES_HANDOFF.md，并严格遵守其中的安全与视觉边界。
 
-任务目标：补齐“本地同步业务闭环”的数据一致性与自动化测试；本任务只使用合成数据，禁止安装、执行或接入 wx-cli，禁止读取任何真实微信聊天内容。
+任务目标：为 `backend/app/connectors/wx_cli.py` 建立仅使用合成 JSON、临时目录和 mock 的协议测试，并准备真实采集前的 Go/No-Go 质量闸门。
 
 实施范围：
-1. 后端同步完成后，正确维护 contacts.last_message_at：
-   - 私聊消息应更新对应稳定 source_id 联系人的最后消息时间。
-   - 群聊消息只在发送人可映射为已有联系人时更新该联系人时间。
-   - 不得创建仅因消息发送人出现而产生的“猜测联系人”。
-2. 增强同步测试：
-   - 首次归档后联系人按 last_message_at 倒序返回。
-   - 重复执行 initial 三次不增加消息量。
-   - incremental 从水位前 5 分钟重叠回读时仍幂等；水位只在原始消息提交成功后推进。
-   - 连接器非 ready 时，/api/v1/sync 返回清晰的失败状态，且不调用 collect。
-3. 确保 SQLite FTS5(trigram) 的中文关键词搜索、消息上下文、账号隔离的既有测试继续通过。
-4. 如需修改 API schema 或 README，只能为上述闭环补充，不做 AI、语义搜索、Obsidian、真实采集、桌面封装或 UI 重设计。
+1. 覆盖 probe、账号匿名稳定 ID、单账号 ready、多账号显式选择和 connector_missing。
+2. 覆盖 collect 的标准模型转换、since、会话限制、无效账号、未就绪状态、命令/权限/JSON 失败、空结果、unknown_shards、possibly_stale 与无效时间。
+3. 不安装、不执行或接入 wx-cli；不读取、解密、导入或上传任何真实微信数据；不改变 DEV-002 的 POST /api/v1/sync 多账号安全闸门。
+4. 仅补充必要测试和验证文档，不做 AI、语义搜索、Obsidian、桌面封装或 UI 重设计。
 
 验收命令：
 - 在 backend 目录运行 .\.venv\Scripts\python.exe -m pytest -q

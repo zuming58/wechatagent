@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import platform
 import shutil
 import subprocess
@@ -95,9 +96,15 @@ class WxCliConnector(Connector):
 
         try:
             payload = self._run_json("daemon", "status", timeout=20)
-            connector_version = str(payload.get("version", "installed")) if isinstance(payload, dict) else "installed"
-        except Exception:
-            connector_version = "installed"
+        except PermissionError as error:
+            return SourceProbe(status="permission_denied", accounts=accounts, reason=str(error), requires_elevation=True)
+        except json.JSONDecodeError as error:
+            return SourceProbe(status="connector_protocol_error", accounts=accounts, reason=str(error), requires_elevation=True)
+        except RuntimeError as error:
+            error_code = str(error)
+            status = error_code if error_code == "connector_missing" else "connector_command_failed"
+            return SourceProbe(status=status, accounts=accounts, reason=error_code, requires_elevation=True)
+        connector_version = str(payload.get("version", "installed")) if isinstance(payload, dict) else "installed"
 
         status = "account_selection_required" if len(accounts) != 1 else "ready"
         if len(accounts) == 1:
@@ -121,24 +128,27 @@ class WxCliConnector(Connector):
         return []
 
     @staticmethod
-    def _parse_time(value: Any) -> datetime:
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc)
+    def _parse_time(value: Any) -> datetime | None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            try:
+                return datetime.fromtimestamp(value, tz=timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                return None
         if isinstance(value, str):
             normalized = value.replace("Z", "+00:00")
             try:
                 parsed = datetime.fromisoformat(normalized)
                 return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
             except ValueError:
-                pass
-        return datetime.now(timezone.utc)
+                return None
+        return None
 
     def collect(self, account_id: str, since: datetime | None, limit_sessions: int | None = None) -> ConnectorBatch:
         probe = self.probe()
         account = next((item for item in probe.accounts if item.id == account_id), None)
         if account is None:
             raise ValueError("account_not_found")
-        if probe.status not in {"ready", "account_selection_required"}:
+        if probe.status != "ready":
             raise RuntimeError(probe.status)
 
         contacts_payload = self._run_json("contacts")
@@ -164,6 +174,7 @@ class WxCliConnector(Connector):
         messages: list[StandardMessage] = []
         meta_statuses: list[str] = []
         unknown_shards: set[str] = set()
+        has_invalid_timestamps = False
         latest_by_shard: dict[str, datetime] = {}
         watermark_by_shard: dict[str, str] = {}
 
@@ -184,6 +195,9 @@ class WxCliConnector(Connector):
 
             for index, item in enumerate(history_rows):
                 sent_at = self._parse_time(item.get("timestamp") or item.get("time"))
+                if sent_at is None:
+                    has_invalid_timestamps = True
+                    continue
                 shard = str(item.get("source_db") or item.get("shard") or "message_unknown")
                 source_message_id = str(item.get("local_id") or item.get("id") or f"{int(sent_at.timestamp())}:{index}")
                 sender_id = str(item.get("sender_username") or item.get("sender_id") or item.get("sender") or "unknown")
@@ -197,7 +211,9 @@ class WxCliConnector(Connector):
                     watermark_by_shard[shard] = sent_at.isoformat()
 
         freshness = "ok"
-        if any("unknown_shards" in status for status in meta_statuses):
+        if has_invalid_timestamps:
+            freshness = "invalid_timestamps"
+        elif any("unknown_shards" in status for status in meta_statuses):
             freshness = "unknown_shards"
         elif any("stale" in status for status in meta_statuses):
             freshness = "possibly_stale"
