@@ -8,14 +8,16 @@ vi.mock("./api", async () => {
     api: {
       sourceStatus: vi.fn(),
       contacts: vi.fn(),
+      contactMessages: vi.fn(),
       search: vi.fn(),
+      messageContext: vi.fn(),
       sync: vi.fn(),
     },
   };
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type SourceStatus } from "./api";
+import { api, LocalApiError, type Contact, type Message, type MessageContext, type SourceStatus } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -29,10 +31,17 @@ function sourceStatus(overrides: Partial<SourceStatus> = {}): SourceStatus {
   };
 }
 
-function renderWithSource(source: SourceStatus) {
+function renderWithSource(source: SourceStatus, data: {
+  contacts?: Contact[];
+  evidence?: Message[];
+  search?: Message[];
+  context?: MessageContext;
+} = {}) {
   mockedApi.sourceStatus.mockResolvedValue(source);
-  mockedApi.contacts.mockResolvedValue([]);
-  mockedApi.search.mockResolvedValue([]);
+  mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
+  mockedApi.contactMessages.mockResolvedValue(data.evidence ?? []);
+  mockedApi.search.mockResolvedValue(data.search ?? []);
+  mockedApi.messageContext.mockResolvedValue(data.context ?? { anchor_id: "synthetic-message", messages: [] });
   mockedApi.sync.mockResolvedValue({ id: "synthetic-run", status: "completed", inserted_count: 0, duplicate_count: 0 });
   return render(<App />);
 }
@@ -136,5 +145,66 @@ describe("multi-account sync safety gate", () => {
 
     fireEvent.click(syncButtons()[0]);
     expect(await screen.findByText("同步未完成（connector_missing）。")).toBeInTheDocument();
+  });
+
+  it("shows last-message timestamps and loads private plus group evidence for the selected contact", async () => {
+    const zhang = { id: "contact-zhang", display_name: "张工", last_message_at: "2026-07-23T11:55:00Z" };
+    const wang = { id: "contact-wang", display_name: "王总", last_message_at: null };
+    const evidence = {
+      id: "message-group",
+      conversation_id: "group-1",
+      conversation_name: "试点群",
+      conversation_type: "group",
+      sender_display_name: "张工",
+      sent_at: "2026-07-23T11:40:00Z",
+      message_type: "text",
+      text_content: "群聊中的已归档发言",
+      snippet: "群聊中的已归档发言",
+    };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), {
+      contacts: [zhang, wang],
+      evidence: [evidence],
+      context: { anchor_id: evidence.id, messages: [evidence] },
+    });
+
+    expect(await screen.findByText("按最后消息时间排序，最新在前")).toBeInTheDocument();
+    expect(await screen.findByText("最后消息：暂无消息")).toBeInTheDocument();
+    expect(screen.getAllByText(/最后消息：/)).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "聊天证据" }));
+    await waitFor(() => expect(mockedApi.contactMessages).toHaveBeenCalledWith("contact-zhang", "account-b"));
+    expect(await screen.findByText("群聊中的已归档发言")).toBeInTheDocument();
+    expect(screen.getByText(/张工.*群聊.*text/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("message-group"));
+    expect(await screen.findByText("消息上下文")).toBeInTheDocument();
+  });
+
+  it("opens context from a keyword search result", async () => {
+    const result = {
+      id: "search-message",
+      conversation_id: "private-1",
+      conversation_name: "张工",
+      conversation_type: "private",
+      sender_display_name: "张工",
+      sent_at: "2026-07-23T11:55:00Z",
+      message_type: "text",
+      text_content: "离线部署的原文结果",
+      snippet: "离线部署的原文结果",
+    };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), {
+      search: [result],
+      context: { anchor_id: result.id, messages: [result] },
+    });
+
+    const queryInput = await screen.findByPlaceholderText("输入关键词后按 Enter");
+    fireEvent.change(queryInput, { target: { value: "离线部署" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+
+    expect(await screen.findByText("离线部署的原文结果")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("search-message"));
+    expect(await screen.findByText("消息上下文")).toBeInTheDocument();
   });
 });

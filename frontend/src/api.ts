@@ -9,7 +9,8 @@ export type SourceStatus = {
   unknown_shards: string[];
 };
 export type Contact = { id: string; display_name: string; company?: string | null; role?: string | null; avatar_ref?: string | null; last_message_at?: string | null };
-export type Message = { id: string; conversation_id: string; conversation_name: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
+export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
+export type MessageContext = { anchor_id: string; messages: Message[] };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
 
 export class LocalApiError extends Error {
@@ -32,6 +33,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   sourceStatus: () => request<SourceStatus>("/source/status"),
   contacts: (accountId: string, query = "") => request<Contact[]>(`/contacts?account_id=${encodeURIComponent(accountId)}&query=${encodeURIComponent(query)}`),
+  contactMessages: (contactId: string, accountId: string) => request<Message[]>(`/contacts/${encodeURIComponent(contactId)}/messages?account_id=${encodeURIComponent(accountId)}`),
   search: (accountId: string, query: string) => request<Message[]>(`/messages/search?account_id=${encodeURIComponent(accountId)}&q=${encodeURIComponent(query)}`),
+  messageContext: (messageId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context`),
   sync: (accountId: string, mode: "initial" | "incremental" = "incremental") => request<SyncRun>("/sync", { method: "POST", body: JSON.stringify({ account_id: accountId, mode }) }),
 };

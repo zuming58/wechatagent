@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type Contact, type Message, type SourceStatus, type SyncRun } from "./api";
+import { api, LocalApiError, type Contact, type Message, type MessageContext, type SourceStatus, type SyncRun } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 
 function avatar(contact: Contact) {
   return contact.avatar_ref ? <img src={contact.avatar_ref} alt="" /> : <span>{contact.display_name.slice(0, 1)}</span>;
+}
+
+function formatMessageTime(value: string | null | undefined) {
+  if (!value) return "暂无消息";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
 function syncResultCopy(run: SyncRun) {
@@ -23,7 +28,12 @@ export function App() {
   const [query, setQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<Message[]>([]);
+  const [evidence, setEvidence] = useState<Message[]>([]);
+  const [context, setContext] = useState<MessageContext | null>(null);
+  const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [contextLoading, setContextLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -60,6 +70,17 @@ export function App() {
     }).catch(() => setNotice("联系人读取失败。"));
   }, [accountId, query, sourceCanSync]);
 
+  useEffect(() => {
+    if (activeTab !== "evidence" || !selected || !accountId) return;
+    let active = true;
+    setEvidenceLoading(true);
+    api.contactMessages(selected.id, accountId)
+      .then((items) => active && setEvidence(items))
+      .catch(() => active && setNotice("聊天证据读取失败。"))
+      .finally(() => active && setEvidenceLoading(false));
+    return () => { active = false; };
+  }, [activeTab, accountId, selected?.id]);
+
   async function sync(mode: "initial" | "incremental") {
     if (!canSync) return;
     setSyncing(true);
@@ -82,8 +103,29 @@ export function App() {
   async function search() {
     if (!accountId || !searchQuery.trim()) return;
     try { setResults(await api.search(accountId, searchQuery.trim())); }
-    catch { setNotice("搜索失败；请先完成首次归档。" ); }
+    catch { setNotice("搜索失败；请先完成首次归档。"); }
   }
+
+  async function showContext(message: Message) {
+    setContextLoading(true);
+    try { setContext(await api.messageContext(message.id)); }
+    catch { setNotice("消息上下文读取失败。"); }
+    finally { setContextLoading(false); }
+  }
+
+  function selectContact(contact: Contact) {
+    setSelected(contact);
+    setContext(null);
+  }
+
+  const messageRows = (items: Message[], emptyCopy: string) => {
+    if (!items.length && !evidenceLoading) return <p className="empty-message">{emptyCopy}</p>;
+    return items.map((item) => <article className="message-row" key={item.id}>
+      <div><strong>{item.conversation_name}</strong><span>{item.sender_display_name} · {item.conversation_type === "group" ? "群聊" : "私聊"} · {item.message_type}</span></div>
+      <p>{item.text_content}</p>
+      <footer><time>{formatMessageTime(item.sent_at)}</time><button className="link" onClick={() => showContext(item)}>查看上下文</button></footer>
+    </article>);
+  };
 
   return <div className="app-shell">
     <aside className="nav">
@@ -93,13 +135,22 @@ export function App() {
     <section className="contacts">
       <label className="search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索联系人、公司或角色" /></label>
       <div className="pane-title"><strong>全部联系人</strong><span>{contacts.length}</span></div>
-      <div className="contact-list">{contacts.map((contact) => <button key={contact.id} className={selected?.id === contact.id ? "selected" : ""} onClick={() => setSelected(contact)}><i>{avatar(contact)}</i><span><strong>{contact.display_name}</strong><small>{contact.company || contact.role || "本地联系人"}</small></span></button>)}{!loading && !contacts.length && <p className="empty">首次归档完成后，联系人会显示在这里。</p>}</div>
+      <p className="sort-hint">按最后消息时间排序，最新在前</p>
+      <div className="contact-list">{contacts.map((contact) => <button key={contact.id} className={selected?.id === contact.id ? "selected" : ""} onClick={() => selectContact(contact)}><i>{avatar(contact)}</i><span><strong>{contact.display_name}</strong><small>{contact.company || contact.role || "已归档联系人"}</small><time>最后消息：{formatMessageTime(contact.last_message_at)}</time></span></button>)}{!loading && !contacts.length && <p className="empty">首次归档完成后，联系人会显示在这里。</p>}</div>
     </section>
     <main>
       <header className="status"><div className="source-status"><span className={sourceReady ? "ok" : "warn"}>{sourceReady ? <CloudCheck weight="fill" /> : <WarningCircle weight="fill" />}{statusCopy}</span>{coverageWarning && <span className="coverage-warning"><WarningCircle weight="fill" />{coverageWarning}</span>}</div><button disabled={!canSync || syncing} onClick={() => sync("incremental")}>{syncing ? <CircleNotch className="spin" /> : <ArrowClockwise />}立即同步</button></header>
-      <section className="hero"><div className="profile-avatar">{selected ? avatar(selected) : <UsersThree />}</div><div><h1>{selected?.display_name ?? "开始建立本地关系记忆"}</h1><p>{selected?.company || selected?.role || (accountSelectionRequired ? "请先明确选择本地账号；系统不会按目录、昵称或头像猜测。" : "先选择一个已确认的数据源账号，再开始首次归档。")}</p><div className="chips"><span>本地优先</span><span>原文可追溯</span><span>身份稳定</span></div></div><div className="hero-actions"><button className="secondary" onClick={() => sync("initial")} disabled={!canSync || syncing}>首次归档</button><button className="primary" onClick={search}><MagnifyingGlass />搜索聊天记录</button></div></section>
-      <div className="tabs"><button className="active">关系总览</button><button>聊天证据</button><button>待办事项</button><button>标签与备注</button></div>
-      <div className="content"><section className="card confirmed"><h2><CheckCircle weight="fill" />已确认的事实</h2><p>真实聊天同步后，在这里保存由你确认的关系事实；每一条都会保留原文上下文入口。</p><ul><li>联系人身份由账号标识与稳定内部标识绑定。</li><li>头像变化仅更新缓存，不会产生新联系人。</li><li>原始消息落库成功后才推进同步水位。</li></ul></section><section className="card ai"><h2><ChatCircleDots weight="fill" />原文搜索</h2><div className="search-results"><label className="inline-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search}>搜索</button></label>{results.map((item) => <article key={item.id}><strong>{item.conversation_name} · {item.sender_display_name}</strong><p>{item.text_content}</p><small>{new Date(item.sent_at).toLocaleString("zh-CN")}</small></article>)}</div></section><section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}<p>{notice || "使用合成数据完成一次归档后，可验证联系人、搜索与上下文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section></div>
+      <section className="hero"><div className="profile-avatar">{selected ? avatar(selected) : <UsersThree />}</div><div><h1>{selected?.display_name ?? "开始建立本地关系记忆"}</h1><p>{selected ? selected.company || selected.role || "消息按稳定内部标识归属；群聊仅展示已映射联系人的发言。" : accountSelectionRequired ? "请先明确选择本地账号；系统不会按目录、昵称或头像猜测。" : "先选择一个已确认的数据源账号，再开始首次归档。"}</p><div className="chips"><span>本地优先</span><span>原文可追溯</span><span>身份稳定</span></div></div><div className="hero-actions"><button className="secondary" onClick={() => sync("initial")} disabled={!canSync || syncing}>首次归档</button><button className="primary" onClick={search}><MagnifyingGlass />搜索聊天记录</button></div></section>
+      <div className="tabs"><button className={activeTab === "overview" ? "active" : ""} aria-selected={activeTab === "overview"} onClick={() => setActiveTab("overview")}>关系总览</button><button className={activeTab === "evidence" ? "active" : ""} aria-selected={activeTab === "evidence"} onClick={() => setActiveTab("evidence")}>聊天证据</button><button disabled>待办事项</button><button disabled>标签与备注</button></div>
+      <div className="content">
+        {activeTab === "overview" && <>
+          <section className="card confirmed"><h2><CheckCircle weight="fill" />已确认的事实</h2><p>关系事实仍需要用户确认；当前工作台只展示可追溯的原文证据。</p><ul><li>联系人身份由账号标识与稳定内部标识绑定。</li><li>头像变化仅更新缓存，不会产生新联系人。</li><li>原始消息落库成功后才推进同步水位。</li></ul></section>
+          <section className="card ai"><h2><ChatCircleDots weight="fill" />原文搜索</h2><div className="search-results"><label className="inline-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search}>搜索</button></label>{messageRows(results, "输入关键词后可查看原文命中与上下文。")}</div></section>
+        </>}
+        {activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。")}</div></section>}
+        {context && <section className="card context-card"><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}
+        <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}<p>{contextLoading ? "正在读取消息上下文…" : notice || "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
+      </div>
     </main>
   </div>;
 }

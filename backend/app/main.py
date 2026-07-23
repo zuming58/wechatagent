@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from .config import Settings, get_settings
@@ -132,6 +132,32 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not contact:
             raise HTTPException(status_code=404, detail="contact_not_found")
         return contact_response(contact)
+
+    @app.get("/api/v1/contacts/{contact_id}/messages", response_model=list[MessageSearchItem])
+    def contact_messages(
+        contact_id: str,
+        account_id: str,
+        limit: int = Query(100, ge=1, le=500),
+        db: Session = Depends(get_db),
+    ) -> list[MessageSearchItem]:
+        contact = db.scalar(select(Contact).where(Contact.id == contact_id, Contact.account_id == account_id))
+        if not contact:
+            raise HTTPException(status_code=404, detail="contact_not_found")
+
+        statement = (
+            select(Message, Conversation)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.account_id == account_id,
+                or_(
+                    and_(Conversation.conversation_type == "private", Conversation.source_id == contact.source_id),
+                    and_(Conversation.conversation_type == "group", Message.sender_id == contact.source_id),
+                ),
+            )
+            .order_by(Message.sent_at.desc())
+            .limit(limit)
+        )
+        return [message_item(message, conversation) for message, conversation in db.execute(statement).all()]
 
     @app.get("/api/v1/messages/search", response_model=list[MessageSearchItem])
     def search_messages(

@@ -155,6 +155,38 @@ def test_contact_search_and_account_isolation(client):
     assert other.json() == []
 
 
+def test_contact_evidence_includes_private_and_known_group_messages(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contacts = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()
+    zhang = next(item for item in contacts if item["source_id"] == "wxid_zhang")
+    wang = next(item for item in contacts if item["source_id"] == "wxid_wang")
+
+    evidence = client.get(f"/api/v1/contacts/{zhang['id']}/messages", params={"account_id": "dev-account"})
+
+    assert evidence.status_code == 200
+    assert [item["text_content"] for item in evidence.json()] == [
+        "下周二上午把方案细节再过一遍。",
+        "先从售后群试点一个月，重点看检索效果。",
+        "收到，我整理方案和并发测试数据。",
+        "需要离线部署与权限审计，客户资料不能上云。",
+    ]
+    assert evidence.json()[1]["conversation_type"] == "group"
+
+    empty_evidence = client.get(f"/api/v1/contacts/{wang['id']}/messages", params={"account_id": "dev-account"})
+    assert empty_evidence.status_code == 200
+    assert empty_evidence.json() == []
+
+    wrong_account = client.get(f"/api/v1/contacts/{zhang['id']}/messages", params={"account_id": "another-account"})
+    assert wrong_account.status_code == 404
+    assert wrong_account.json()["detail"] == "contact_not_found"
+
+    missing_contact = client.get("/api/v1/contacts/missing/messages", params={"account_id": "dev-account"})
+    assert missing_contact.status_code == 404
+
+    limited = client.get(f"/api/v1/contacts/{zhang['id']}/messages", params={"account_id": "dev-account", "limit": 2})
+    assert [item["text_content"] for item in limited.json()] == ["下周二上午把方案细节再过一遍。", "先从售后群试点一个月，重点看检索效果。"]
+
+
 def test_private_and_group_messages_update_only_known_contacts(client):
     base = datetime(2026, 7, 23, 10, 0, tzinfo=timezone.utc)
     account = FixedBatchConnector.account
