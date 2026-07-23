@@ -11,6 +11,8 @@ vi.mock("./api", async () => {
       contactMessages: vi.fn(),
       facts: vi.fn(),
       factHistory: vi.fn(),
+      updateContactProfile: vi.fn(),
+      contactProfileHistory: vi.fn(),
       createFact: vi.fn(),
       updateFact: vi.fn(),
       deleteFact: vi.fn(),
@@ -22,7 +24,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type Contact, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
+import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -41,6 +43,7 @@ function renderWithSource(source: SourceStatus, data: {
   evidence?: Message[];
   facts?: Fact[];
   history?: FactHistoryEvent[];
+  profileHistory?: ContactProfileHistoryEvent[];
   search?: Message[];
   context?: MessageContext;
 } = {}) {
@@ -49,6 +52,8 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.contactMessages.mockResolvedValue(data.evidence ?? []);
   mockedApi.facts.mockResolvedValue(data.facts ?? []);
   mockedApi.factHistory.mockResolvedValue(data.history ?? []);
+  mockedApi.contactProfileHistory.mockResolvedValue(data.profileHistory ?? []);
+  mockedApi.updateContactProfile.mockImplementation(async (contactId, _accountId, payload) => ({ id: contactId, display_name: payload.remark_name || "Synthetic Contact", remark_name: "Source Remark", nickname: "Source Nickname", company: "Source Company", role: "Source Role", user_remark_name: payload.remark_name || null, user_confirmed_real_name: payload.confirmed_real_name || null, user_company: payload.company || null, user_role: payload.role || null, effective_company: payload.company || "Source Company", effective_role: payload.role || "Source Role", last_message_at: null }));
   mockedApi.createFact.mockImplementation(async (_contactId, accountId, payload) => ({ id: "new-fact", account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
   mockedApi.updateFact.mockImplementation(async (factId, accountId, payload) => ({ id: factId, account_id: accountId, contact_id: "contact-zhang", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
   mockedApi.deleteFact.mockResolvedValue(undefined);
@@ -287,5 +292,33 @@ describe("multi-account sync safety gate", () => {
     await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("history-message"));
     fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
     expect(screen.queryByRole("heading", { name: "事实历史" })).not.toBeInTheDocument();
+  });
+
+  it("edits user contact details, shows profile history, and clears overrides", async () => {
+    const first: Contact = { id: "contact-zhang", display_name: "Source Remark", remark_name: "Source Remark", company: "Source Company", role: "Source Role", effective_company: "Source Company", effective_role: "Source Role", last_message_at: null };
+    const second: Contact = { id: "contact-chen", display_name: "Second Contact", last_message_at: null };
+    const profileHistory: ContactProfileHistoryEvent[] = [{ id: "profile-history-1", account_id: "account-b", contact_id: first.id, user_remark_name: "User Remark", user_company: "User Company", user_role: "User Role", occurred_at: "2026-07-23T12:01:00Z" }];
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [first, second], profileHistory });
+
+    const edit = await screen.findByRole("button", { name: "编辑资料" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    fireEvent.change(screen.getByLabelText("备注"), { target: { value: "User Remark" } });
+    fireEvent.change(screen.getByLabelText("公司"), { target: { value: "User Company" } });
+    fireEvent.change(screen.getByLabelText("角色"), { target: { value: "User Role" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存资料" }));
+
+    await waitFor(() => expect(mockedApi.updateContactProfile).toHaveBeenCalledWith("contact-zhang", "account-b", { remark_name: "User Remark", confirmed_real_name: "", company: "User Company", role: "User Role" }));
+    expect(await screen.findAllByText("用户维护")).not.toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "资料历史" }));
+    await waitFor(() => expect(mockedApi.contactProfileHistory).toHaveBeenCalledWith("contact-zhang", "account-b"));
+    expect(await screen.findByRole("heading", { name: "资料历史" })).toBeInTheDocument();
+    expect(screen.getByText(/User Remark.*User Company.*User Role/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除用户维护" }));
+    await waitFor(() => expect(mockedApi.updateContactProfile).toHaveBeenLastCalledWith("contact-zhang", "account-b", { remark_name: "", confirmed_real_name: "", company: "", role: "" }));
+    fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
+    expect(screen.queryByRole("heading", { name: "资料历史" })).not.toBeInTheDocument();
   });
 });

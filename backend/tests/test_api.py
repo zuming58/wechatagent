@@ -399,3 +399,65 @@ def test_contact_facts_are_manual_traceable_and_survive_sync(client):
     assert repeated_sync.status_code == 200
     assert client.get(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}).json()[0]["content"] == "Updated synthetic commitment"
     assert len(client.get(f"/api/v1/contacts/{zhang['id']}/fact-history", params={"account_id": "dev-account"}).json()) == 4
+
+
+def test_user_contact_profile_overrides_are_traceable_and_survive_sync(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contacts = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()
+    zhang = next(item for item in contacts if item["source_id"] == "wxid_zhang")
+    chen = next(item for item in contacts if item["source_id"] == "wxid_chen")
+
+    updated = client.patch(
+        f"/api/v1/contacts/{zhang['id']}/profile",
+        params={"account_id": "dev-account"},
+        json={"remark_name": "User Remark", "confirmed_real_name": "User Name", "company": "User Company", "role": "User Role"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["display_name"] == "User Remark"
+    assert updated.json()["user_confirmed_real_name"] == "User Name"
+    assert updated.json()["effective_company"] == "User Company"
+    assert updated.json()["effective_role"] == "User Role"
+
+    search = client.get("/api/v1/contacts", params={"account_id": "dev-account", "query": "User Company"})
+    assert [item["id"] for item in search.json()] == [zhang["id"]]
+
+    history = client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "dev-account"})
+    assert history.status_code == 200
+    assert len(history.json()) == 1
+    assert history.json()[0]["user_role"] == "User Role"
+
+    cleared = client.patch(
+        f"/api/v1/contacts/{zhang['id']}/profile",
+        params={"account_id": "dev-account"},
+        json={"company": "   "},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["user_company"] is None
+    assert cleared.json()["effective_company"] == cleared.json()["company"]
+    history = client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "dev-account"})
+    assert len(history.json()) == 2
+    assert history.json()[0]["user_company"] is None
+
+    unchanged = client.patch(
+        f"/api/v1/contacts/{zhang['id']}/profile",
+        params={"account_id": "dev-account"},
+        json={"remark_name": "User Remark"},
+    )
+    assert unchanged.status_code == 200
+    assert len(client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "dev-account"}).json()) == 2
+
+    assert client.patch(
+        f"/api/v1/contacts/{zhang['id']}/profile",
+        params={"account_id": "another-account"},
+        json={"remark_name": "Other account"},
+    ).status_code == 404
+    assert client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "another-account"}).status_code == 404
+    assert client.get(f"/api/v1/contacts/{chen['id']}/profile-history", params={"account_id": "dev-account"}).json() == []
+
+    repeated_sync = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    assert repeated_sync.status_code == 200
+    refreshed = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()
+    refreshed_zhang = next(item for item in refreshed if item["id"] == zhang["id"])
+    assert refreshed_zhang["display_name"] == "User Remark"
+    assert refreshed_zhang["user_role"] == "User Role"
+    assert len(client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "dev-account"}).json()) == 2

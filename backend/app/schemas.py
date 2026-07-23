@@ -44,8 +44,15 @@ class ContactResponse(BaseModel):
     display_name: str
     remark_name: str | None
     nickname: str | None
+    confirmed_real_name: str | None
     company: str | None
     role: str | None
+    user_remark_name: str | None
+    user_confirmed_real_name: str | None
+    user_company: str | None
+    user_role: str | None
+    effective_company: str | None
+    effective_role: str | None
     avatar_ref: str | None
     avatar_version: str | None
     avatar_updated_at: datetime | None
@@ -96,3 +103,21 @@ class FactHistoryResponse(BaseModel):
     content: str
     occurred_at: datetime
     evidence: list[MessageSearchItem]
+
+
+class ContactProfileWriteRequest(BaseModel):
+    remark_name: str | None = Field(default=None, max_length=255)
+    confirmed_real_name: str | None = Field(default=None, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+    role: str | None = Field(default=None, max_length=255)
+
+
+class ContactProfileHistoryResponse(BaseModel):
+    id: str
+    account_id: str
+    contact_id: str
+    user_remark_name: str | None
+    user_confirmed_real_name: str | None
+    user_company: str | None
+    user_role: str | None
+    occurred_at: datetime

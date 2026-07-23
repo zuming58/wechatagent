@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, selectinload
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Contact, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
-from .schemas import AccountSummary, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
+from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
+from .schemas import AccountSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
 from .services.sync import SyncService
 
 
@@ -28,8 +28,15 @@ def contact_response(contact: Contact) -> ContactResponse:
         display_name=contact.display_name,
         remark_name=contact.remark_name,
         nickname=contact.nickname,
+        confirmed_real_name=contact.confirmed_real_name,
         company=contact.company,
         role=contact.role,
+        user_remark_name=contact.user_remark_name,
+        user_confirmed_real_name=contact.user_confirmed_real_name,
+        user_company=contact.user_company,
+        user_role=contact.user_role,
+        effective_company=contact.effective_company,
+        effective_role=contact.effective_role,
         avatar_ref=contact.avatar_ref,
         avatar_version=contact.avatar_version,
         avatar_updated_at=contact.avatar_updated_at,
@@ -92,6 +99,35 @@ def record_fact_history(db: Session, fact: Fact, event_type: str, evidence: list
     db.flush()
     for message in evidence:
         db.add(FactHistoryMessageEvidence(id=str(uuid.uuid4()), event_id=event.id, message_id=message.id))
+
+
+def profile_history_response(event: ContactProfileHistoryEvent) -> ContactProfileHistoryResponse:
+    return ContactProfileHistoryResponse(
+        id=event.id,
+        account_id=event.account_id,
+        contact_id=event.contact_id,
+        user_remark_name=event.user_remark_name,
+        user_confirmed_real_name=event.user_confirmed_real_name,
+        user_company=event.user_company,
+        user_role=event.user_role,
+        occurred_at=event.occurred_at,
+    )
+
+
+def record_contact_profile_history(db: Session, contact: Contact) -> None:
+    db.add(ContactProfileHistoryEvent(
+        id=str(uuid.uuid4()),
+        account_id=contact.account_id,
+        contact_id=contact.id,
+        user_remark_name=contact.user_remark_name,
+        user_confirmed_real_name=contact.user_confirmed_real_name,
+        user_company=contact.user_company,
+        user_role=contact.user_role,
+    ))
+
+
+def normalized_profile_value(value: str | None) -> str | None:
+    return value.strip() or None if value is not None else None
 
 
 def account_contact_or_404(db: Session, contact_id: str, account_id: str) -> Contact:
@@ -193,8 +229,8 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         statement = select(Contact).where(Contact.account_id == account_id)
         if query:
             like = f"%{query}%"
-            statement = statement.where(or_(Contact.remark_name.like(like), Contact.nickname.like(like), Contact.confirmed_real_name.like(like), Contact.company.like(like), Contact.role.like(like)))
-        statement = statement.order_by(Contact.last_message_at.desc().nullslast(), Contact.remark_name, Contact.nickname).limit(limit)
+            statement = statement.where(or_(Contact.user_remark_name.like(like), Contact.remark_name.like(like), Contact.user_confirmed_real_name.like(like), Contact.nickname.like(like), Contact.confirmed_real_name.like(like), Contact.user_company.like(like), Contact.company.like(like), Contact.user_role.like(like), Contact.role.like(like)))
+        statement = statement.order_by(Contact.last_message_at.desc().nullslast(), func.coalesce(Contact.user_remark_name, Contact.remark_name, Contact.user_confirmed_real_name, Contact.nickname, Contact.confirmed_real_name, Contact.source_id)).limit(limit)
         return [contact_response(contact) for contact in db.scalars(statement)]
 
     @app.get("/api/v1/contacts/{contact_id}", response_model=ContactResponse)
@@ -203,6 +239,45 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not contact:
             raise HTTPException(status_code=404, detail="contact_not_found")
         return contact_response(contact)
+
+    @app.patch("/api/v1/contacts/{contact_id}/profile", response_model=ContactResponse)
+    def update_contact_profile(contact_id: str, request: ContactProfileWriteRequest, account_id: str, db: Session = Depends(get_db)) -> ContactResponse:
+        contact = account_contact_or_404(db, contact_id, account_id)
+        fields = {
+            "remark_name": "user_remark_name",
+            "confirmed_real_name": "user_confirmed_real_name",
+            "company": "user_company",
+            "role": "user_role",
+        }
+        changed = False
+        for request_field, model_field in fields.items():
+            if request_field not in request.model_fields_set:
+                continue
+            value = normalized_profile_value(getattr(request, request_field))
+            if getattr(contact, model_field) != value:
+                setattr(contact, model_field, value)
+                changed = True
+        if changed:
+            record_contact_profile_history(db, contact)
+            db.commit()
+            db.refresh(contact)
+        return contact_response(contact)
+
+    @app.get("/api/v1/contacts/{contact_id}/profile-history", response_model=list[ContactProfileHistoryResponse])
+    def list_contact_profile_history(
+        contact_id: str,
+        account_id: str,
+        limit: int = Query(100, ge=1, le=500),
+        db: Session = Depends(get_db),
+    ) -> list[ContactProfileHistoryResponse]:
+        account_contact_or_404(db, contact_id, account_id)
+        events = db.scalars(
+            select(ContactProfileHistoryEvent)
+            .where(ContactProfileHistoryEvent.account_id == account_id, ContactProfileHistoryEvent.contact_id == contact_id)
+            .order_by(ContactProfileHistoryEvent.occurred_at.desc(), ContactProfileHistoryEvent.id.desc())
+            .limit(limit)
+        ).all()
+        return [profile_history_response(event) for event in events]
 
     @app.get("/api/v1/contacts/{contact_id}/messages", response_model=list[MessageSearchItem])
     def contact_messages(

@@ -8,7 +8,23 @@ export type SourceStatus = {
   requires_elevation: boolean;
   unknown_shards: string[];
 };
-export type Contact = { id: string; display_name: string; company?: string | null; role?: string | null; avatar_ref?: string | null; last_message_at?: string | null };
+export type Contact = {
+  id: string;
+  display_name: string;
+  remark_name?: string | null;
+  nickname?: string | null;
+  confirmed_real_name?: string | null;
+  company?: string | null;
+  role?: string | null;
+  user_remark_name?: string | null;
+  user_confirmed_real_name?: string | null;
+  user_company?: string | null;
+  user_role?: string | null;
+  effective_company?: string | null;
+  effective_role?: string | null;
+  avatar_ref?: string | null;
+  last_message_at?: string | null;
+};
 export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
 export type MessageContext = { anchor_id: string; messages: Message[] };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
@@ -35,6 +51,17 @@ export type FactHistoryEvent = {
   occurred_at: string;
   evidence: Message[];
 };
+export type ContactProfileWrite = { remark_name?: string | null; confirmed_real_name?: string | null; company?: string | null; role?: string | null };
+export type ContactProfileHistoryEvent = {
+  id: string;
+  account_id: string;
+  contact_id: string;
+  user_remark_name?: string | null;
+  user_confirmed_real_name?: string | null;
+  user_company?: string | null;
+  user_role?: string | null;
+  occurred_at: string;
+};
 
 export class LocalApiError extends Error {
   constructor(public readonly status: number, public readonly errorCode?: string, public readonly reason?: string) {
@@ -60,6 +87,8 @@ export const api = {
   contactMessages: (contactId: string, accountId: string) => request<Message[]>(`/contacts/${encodeURIComponent(contactId)}/messages?account_id=${encodeURIComponent(accountId)}`),
   facts: (contactId: string, accountId: string) => request<Fact[]>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`),
   factHistory: (contactId: string, accountId: string) => request<FactHistoryEvent[]>(`/contacts/${encodeURIComponent(contactId)}/fact-history?account_id=${encodeURIComponent(accountId)}`),
+  updateContactProfile: (contactId: string, accountId: string, payload: ContactProfileWrite) => request<Contact>(`/contacts/${encodeURIComponent(contactId)}/profile?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  contactProfileHistory: (contactId: string, accountId: string) => request<ContactProfileHistoryEvent[]>(`/contacts/${encodeURIComponent(contactId)}/profile-history?account_id=${encodeURIComponent(accountId)}`),
   createFact: (contactId: string, accountId: string, payload: FactWrite) => request<Fact>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
   updateFact: (factId: string, accountId: string, payload: FactWrite) => request<Fact>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteFact: (factId: string, accountId: string) => request<void>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),

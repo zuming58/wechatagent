@@ -46,6 +46,10 @@ class Contact(Base):
     confirmed_real_name: Mapped[str | None] = mapped_column(String(255))
     company: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[str | None] = mapped_column(String(255))
+    user_remark_name: Mapped[str | None] = mapped_column(String(255))
+    user_confirmed_real_name: Mapped[str | None] = mapped_column(String(255))
+    user_company: Mapped[str | None] = mapped_column(String(255))
+    user_role: Mapped[str | None] = mapped_column(String(255))
     avatar_ref: Mapped[str | None] = mapped_column(Text)
     avatar_version: Mapped[str | None] = mapped_column(String(128))
     avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -53,7 +57,15 @@ class Contact(Base):
 
     @property
     def display_name(self) -> str:
-        return self.remark_name or self.nickname or self.confirmed_real_name or self.source_id[-8:]
+        return self.user_remark_name or self.remark_name or self.user_confirmed_real_name or self.nickname or self.confirmed_real_name or self.source_id[-8:]
+
+    @property
+    def effective_company(self) -> str | None:
+        return self.user_company or self.company
+
+    @property
+    def effective_role(self) -> str | None:
+        return self.user_role or self.role
 
 
 class Message(Base):
@@ -144,6 +156,22 @@ class FactHistoryMessageEvidence(Base):
 
     event: Mapped[FactHistoryEvent] = relationship(back_populates="evidence")
     message: Mapped[Message] = relationship()
+
+
+class ContactProfileHistoryEvent(Base):
+    __tablename__ = "contact_profile_history_events"
+    __table_args__ = (
+        Index("ix_contact_profile_history_account_contact_occurred", "account_id", "contact_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    user_remark_name: Mapped[str | None] = mapped_column(String(255))
+    user_confirmed_real_name: Mapped[str | None] = mapped_column(String(255))
+    user_company: Mapped[str | None] = mapped_column(String(255))
+    user_role: Mapped[str | None] = mapped_column(String(255))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class SyncShard(Base):
