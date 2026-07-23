@@ -121,7 +121,7 @@ def test_collect_limits_sessions_with_synthetic_payloads(monkeypatch, tmp_path):
     assert not any("Second" in command for command in calls)
 
 
-def test_collect_rejects_invalid_or_unselected_accounts_without_commands(monkeypatch):
+def test_collect_rejects_invalid_accounts_and_accepts_an_explicit_multi_account_selection(monkeypatch):
     connector = WxCliConnector()
     calls = []
     account = SourceAccount("synthetic-account", "synthetic:account", "Synthetic account", selected=False)
@@ -131,11 +131,16 @@ def test_collect_rejects_invalid_or_unselected_accounts_without_commands(monkeyp
     with pytest.raises(ValueError, match="account_not_found"):
         connector.collect("unknown-account", None)
 
-    monkeypatch.setattr(connector, "probe", lambda: SourceProbe(status="account_selection_required", accounts=[account]))
-    with pytest.raises(RuntimeError, match="account_selection_required"):
-        connector.collect(account.id, None)
+    def empty_payloads(*args, **_kwargs):
+        calls.append(args)
+        return {"contacts": []} if args == ("contacts",) else {"sessions": []}
 
-    assert calls == []
+    monkeypatch.setattr(connector, "_run_json", empty_payloads)
+    monkeypatch.setattr(connector, "probe", lambda: SourceProbe(status="account_selection_required", accounts=[account]))
+    batch = connector.collect(account.id, None)
+
+    assert batch.account.id == account.id
+    assert calls == [("contacts",), ("sessions",)]
 
 
 def test_collect_stops_after_synthetic_command_and_permission_failures(monkeypatch):

@@ -148,7 +148,10 @@ class WxCliConnector(Connector):
         account = next((item for item in probe.accounts if item.id == account_id), None)
         if account is None:
             raise ValueError("account_not_found")
-        if probe.status != "ready":
+        # The API has already required the caller to explicitly choose an ID
+        # from probe.accounts.  A multiple-account probe must therefore not
+        # reject that explicit selection here.
+        if probe.status not in {"ready", "account_selection_required"}:
             raise RuntimeError(probe.status)
 
         contacts_payload = self._run_json("contacts")
