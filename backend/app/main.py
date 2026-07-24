@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
-from .schemas import AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TimelineEventResponse
+from .models import ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun, Tag, TagLink
+from .schemas import AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -164,6 +164,32 @@ def action_item_response(item: ActionItem) -> ActionItemResponse:
 
 def action_item_history_response(event: ActionItemHistoryEvent) -> ActionItemHistoryResponse:
     return ActionItemHistoryResponse(id=event.id, account_id=event.account_id, action_item_id=event.action_item_id, event_type=event.event_type, content=event.content, status=event.status, due_at=event.due_at, occurred_at=event.occurred_at, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence])
+
+
+def tag_response(tag: Tag) -> TagResponse:
+    return TagResponse(id=tag.id, account_id=tag.account_id, name=tag.name, color=tag.color, created_at=tag.created_at, updated_at=tag.updated_at)
+
+
+def tag_link_response(link: TagLink, tag: Tag) -> TagLinkResponse:
+    return TagLinkResponse(id=link.id, account_id=link.account_id, tag=tag_response(tag), target_type=link.target_type, target_id=link.target_id, created_at=link.created_at)
+
+
+def tag_or_404(db: Session, tag_id: str, account_id: str) -> Tag:
+    tag = db.scalar(select(Tag).where(Tag.id == tag_id, Tag.account_id == account_id))
+    if not tag:
+        raise HTTPException(status_code=404, detail="tag_not_found")
+    return tag
+
+
+def tag_target_or_422(db: Session, account_id: str, target_type: str, target_id: str) -> None:
+    target_models = {"contact": Contact, "fact": Fact, "knowledge_card": KnowledgeCard, "action_item": ActionItem}
+    model = target_models[target_type]
+    if not db.scalar(select(model.id).where(model.id == target_id, model.account_id == account_id)):
+        raise HTTPException(status_code=422, detail="tag_target_not_found")
+
+
+def remove_tag_links_for_target(db: Session, account_id: str, target_type: str, target_id: str) -> None:
+    db.query(TagLink).filter(TagLink.account_id == account_id, TagLink.target_type == target_type, TagLink.target_id == target_id).delete()
 
 
 def knowledge_card_messages_or_422(db: Session, account_id: str, message_ids: list[str]) -> list[Message]:
@@ -521,6 +547,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not fact:
             raise HTTPException(status_code=404, detail="fact_not_found")
         record_fact_history(db, fact, "deleted", [link.message for link in fact.evidence])
+        remove_tag_links_for_target(db, account_id, "fact", fact.id)
         db.delete(fact)
         db.commit()
 
@@ -569,6 +596,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not card:
             raise HTTPException(status_code=404, detail="knowledge_card_not_found")
         record_knowledge_card_history(db, card, "deleted", [link.message for link in card.evidence])
+        remove_tag_links_for_target(db, account_id, "knowledge_card", card.id)
         db.delete(card)
         db.commit()
 
@@ -620,6 +648,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not item:
             raise HTTPException(status_code=404, detail="action_item_not_found")
         record_action_item_history(db, item, "deleted", [link.message for link in item.evidence])
+        remove_tag_links_for_target(db, account_id, "action_item", item.id)
         db.delete(item)
         db.commit()
 
@@ -640,6 +669,69 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             raise HTTPException(status_code=404, detail="knowledge_card_not_found")
         events = db.scalars(select(KnowledgeCardHistoryEvent).where(KnowledgeCardHistoryEvent.card_id == card_id, KnowledgeCardHistoryEvent.account_id == account_id).options(selectinload(KnowledgeCardHistoryEvent.evidence).selectinload(KnowledgeCardHistoryEvidence.message).selectinload(Message.conversation)).order_by(KnowledgeCardHistoryEvent.occurred_at.desc(), KnowledgeCardHistoryEvent.id.desc()).limit(limit)).all()
         return [knowledge_card_history_response(event) for event in events]
+
+    @app.get("/api/v1/tags", response_model=list[TagResponse])
+    def list_tags(account_id: str, db: Session = Depends(get_db)) -> list[TagResponse]:
+        return [tag_response(tag) for tag in db.scalars(select(Tag).where(Tag.account_id == account_id).order_by(Tag.name, Tag.id))]
+
+    @app.post("/api/v1/tags", response_model=TagResponse, status_code=201)
+    def create_tag(request: TagWriteRequest, account_id: str, db: Session = Depends(get_db)) -> TagResponse:
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="tag_name_required")
+        if db.scalar(select(Tag.id).where(Tag.account_id == account_id, Tag.name == name)):
+            raise HTTPException(status_code=409, detail="tag_name_taken")
+        tag = Tag(id=str(uuid.uuid4()), account_id=account_id, name=name, color=request.color.lower())
+        db.add(tag)
+        db.commit()
+        db.refresh(tag)
+        return tag_response(tag)
+
+    @app.patch("/api/v1/tags/{tag_id}", response_model=TagResponse)
+    def update_tag(tag_id: str, request: TagWriteRequest, account_id: str, db: Session = Depends(get_db)) -> TagResponse:
+        tag = tag_or_404(db, tag_id, account_id)
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="tag_name_required")
+        duplicate = db.scalar(select(Tag.id).where(Tag.account_id == account_id, Tag.name == name, Tag.id != tag.id))
+        if duplicate:
+            raise HTTPException(status_code=409, detail="tag_name_taken")
+        tag.name, tag.color = name, request.color.lower()
+        db.commit()
+        db.refresh(tag)
+        return tag_response(tag)
+
+    @app.delete("/api/v1/tags/{tag_id}", status_code=204)
+    def delete_tag(tag_id: str, account_id: str, db: Session = Depends(get_db)) -> None:
+        db.delete(tag_or_404(db, tag_id, account_id))
+        db.commit()
+
+    @app.get("/api/v1/tags/links", response_model=list[TagLinkResponse])
+    def list_tag_links(account_id: str, target_type: str = Query(pattern="^(contact|fact|knowledge_card|action_item)$"), target_id: str = Query(min_length=1), db: Session = Depends(get_db)) -> list[TagLinkResponse]:
+        tag_target_or_422(db, account_id, target_type, target_id)
+        rows = db.execute(select(TagLink, Tag).join(Tag, Tag.id == TagLink.tag_id).where(TagLink.account_id == account_id, TagLink.target_type == target_type, TagLink.target_id == target_id).order_by(Tag.name, Tag.id)).all()
+        return [tag_link_response(link, tag) for link, tag in rows]
+
+    @app.post("/api/v1/tags/links", response_model=TagLinkResponse, status_code=201)
+    def create_tag_link(request: TagLinkWriteRequest, account_id: str, db: Session = Depends(get_db)) -> TagLinkResponse:
+        tag = tag_or_404(db, request.tag_id, account_id)
+        tag_target_or_422(db, account_id, request.target_type, request.target_id)
+        if db.scalar(select(TagLink.id).where(TagLink.tag_id == tag.id, TagLink.target_type == request.target_type, TagLink.target_id == request.target_id)):
+            raise HTTPException(status_code=409, detail="tag_link_exists")
+        link = TagLink(id=str(uuid.uuid4()), account_id=account_id, tag_id=tag.id, target_type=request.target_type, target_id=request.target_id)
+        db.add(link)
+        db.commit()
+        db.refresh(link)
+        return tag_link_response(link, tag)
+
+    @app.delete("/api/v1/tags/{tag_id}/links", status_code=204)
+    def delete_tag_link(tag_id: str, account_id: str, target_type: str = Query(pattern="^(contact|fact|knowledge_card|action_item)$"), target_id: str = Query(min_length=1), db: Session = Depends(get_db)) -> None:
+        tag_or_404(db, tag_id, account_id)
+        link = db.scalar(select(TagLink).where(TagLink.tag_id == tag_id, TagLink.account_id == account_id, TagLink.target_type == target_type, TagLink.target_id == target_id))
+        if not link:
+            raise HTTPException(status_code=404, detail="tag_link_not_found")
+        db.delete(link)
+        db.commit()
 
     @app.get("/api/v1/timeline", response_model=list[TimelineEventResponse])
     def timeline(

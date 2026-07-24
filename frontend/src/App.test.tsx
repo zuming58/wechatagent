@@ -33,12 +33,19 @@ vi.mock("./api", async () => {
       deleteActionItem: vi.fn(),
       actionItemHistory: vi.fn(),
       timeline: vi.fn(),
+      tags: vi.fn(),
+      createTag: vi.fn(),
+      updateTag: vi.fn(),
+      deleteTag: vi.fn(),
+      tagLinks: vi.fn(),
+      createTagLink: vi.fn(),
+      deleteTagLink: vi.fn(),
     },
   };
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus, type TimelineEvent } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -63,6 +70,8 @@ function renderWithSource(source: SourceStatus, data: {
   search?: Message[];
   context?: MessageContext;
   timeline?: TimelineEvent[];
+  tags?: Tag[];
+  tagLinks?: TagLink[];
 } = {}) {
   mockedApi.sourceStatus.mockResolvedValue(source);
   mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
@@ -88,6 +97,13 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.actionItems.mockResolvedValue(data.actionItems ?? []);
   mockedApi.actionItemHistory.mockResolvedValue(data.actionHistory ?? []);
   mockedApi.timeline.mockResolvedValue(data.timeline ?? []);
+  mockedApi.tags.mockResolvedValue(data.tags ?? []);
+  mockedApi.createTag.mockImplementation(async (accountId, payload) => ({ id: "new-tag", account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", ...payload }));
+  mockedApi.updateTag.mockImplementation(async (tagId, accountId, payload) => ({ id: tagId, account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", ...payload }));
+  mockedApi.deleteTag.mockResolvedValue(undefined);
+  mockedApi.tagLinks.mockResolvedValue(data.tagLinks ?? []);
+  mockedApi.createTagLink.mockImplementation(async (accountId, tagId, targetType, targetId) => ({ id: "new-tag-link", account_id: accountId, tag: (data.tags ?? []).find((tag) => tag.id === tagId) ?? { id: tagId, account_id: accountId, name: "Tag", color: "#1677ff", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z" }, target_type: targetType, target_id: targetId, created_at: "2026-07-23T12:00:00Z" }));
+  mockedApi.deleteTagLink.mockResolvedValue(undefined);
   return render(<App />);
 }
 
@@ -438,10 +454,30 @@ describe("multi-account sync safety gate", () => {
     await waitFor(() => expect(mockedApi.timeline).toHaveBeenLastCalledWith("account-b", { kinds: ["message", "fact", "profile", "knowledge_card", "action_item"], contact_id: "contact-zhang" }));
   });
 
-  it("keeps unopened tag navigation disabled", async () => {
+  it("manages manual tags and links a tag only to the selected local target", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const fact: Fact = { id: "fact-1", account_id: "account-b", contact_id: contact.id, kind: "need", content: "Synthetic requirement", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: [] };
+    const tag: Tag = { id: "tag-1", account_id: "account-b", name: "Priority", color: "#1677ff", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z" };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], facts: [fact], tags: [tag] });
+
+    fireEvent.click(await screen.findByRole("button", { name: "标签管理" }));
+    expect(await screen.findByRole("heading", { name: "标签管理" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建标签" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Customer" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存标签" }));
+    await waitFor(() => expect(mockedApi.createTag).toHaveBeenCalledWith("account-b", { name: "Customer", color: "#1677ff" }));
+
+    fireEvent.change(screen.getByLabelText("对象类型"), { target: { value: "fact" } });
+    await waitFor(() => expect(screen.getByLabelText("对象")).toHaveValue("fact-1"));
+    fireEvent.click(screen.getByRole("button", { name: "添加关联" }));
+    await waitFor(() => expect(mockedApi.createTagLink).toHaveBeenCalledWith("account-b", "tag-1", "fact", "fact-1"));
+    expect(await screen.findAllByText("Priority")).not.toHaveLength(0);
+  });
+
+  it("keeps implemented workspace navigation available when the connector is unavailable", async () => {
     renderWithSource(sourceStatus({ status: "connector_missing", reason: "Synthetic connector is unavailable." }));
 
     expect(await screen.findByRole("button", { name: /时间线/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /标签管理/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /标签管理/ })).toBeEnabled();
   });
 });

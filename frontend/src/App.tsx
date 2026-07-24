@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type TimelineEvent, type TimelineKind } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 const factKindLabels: Record<FactKind, string> = {
@@ -26,6 +26,7 @@ const emptyFact = (): FactWrite => ({ kind: "company", content: "", message_ids:
 const emptyProfile = (): ContactProfileWrite => ({ remark_name: "", confirmed_real_name: "", company: "", role: "" });
 const emptyKnowledgeCard = (): KnowledgeCardWrite => ({ card_type: "note", title: "", content: "", message_ids: [] });
 const emptyActionItem = (): ActionItemWrite => ({ content: "", status: "open", due_at: null, message_ids: [] });
+const emptyTag = (): TagWrite => ({ name: "", color: "#1677ff" });
 
 function avatar(contact: Contact) {
   return contact.avatar_ref ? <img src={contact.avatar_ref} alt="" /> : <span>{contact.display_name.slice(0, 1)}</span>;
@@ -87,11 +88,18 @@ export function App() {
   const [actionDraft, setActionDraft] = useState<ActionItemWrite | null>(null);
   const [actionHistory, setActionHistory] = useState<ActionItemHistoryEvent[]>([]);
   const [actionHistoryItemId, setActionHistoryItemId] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<"relationships" | "actions" | "search" | "timeline">("relationships");
+  const [workspace, setWorkspace] = useState<"relationships" | "actions" | "search" | "timeline" | "tags">("relationships");
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [timelineKinds, setTimelineKinds] = useState<TimelineKind[]>(["message", "fact", "profile", "knowledge_card", "action_item"]);
   const [timelineContactOnly, setTimelineContactOnly] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [tagDraft, setTagDraft] = useState<TagWrite | null>(null);
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [tagAssignmentId, setTagAssignmentId] = useState("");
+  const [tagTargetType, setTagTargetType] = useState<TagTargetType>("contact");
+  const [tagTargetId, setTagTargetId] = useState("");
+  const [tagLinks, setTagLinks] = useState<TagLink[]>([]);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -169,6 +177,21 @@ export function App() {
     Promise.resolve(api.knowledgeCards(accountId)).then((items) => active && setKnowledgeCards(items ?? [])).catch(() => active && setNotice("知识卡读取失败。"));
     return () => { active = false; };
   }, [accountId]);
+
+  useEffect(() => {
+    if (!accountId) { setTags([]); setTagAssignmentId(""); return; }
+    api.tags(accountId).then((items) => {
+      setTags(items);
+      setTagAssignmentId((current) => items.some((tag) => tag.id === current) ? current : items[0]?.id ?? "");
+    }).catch(() => setNotice("标签读取失败。"));
+  }, [accountId]);
+
+  useEffect(() => {
+    if (workspace !== "tags" || !accountId || !tagTargetId) { setTagLinks([]); return; }
+    let active = true;
+    api.tagLinks(accountId, tagTargetType, tagTargetId).then((items) => active && setTagLinks(items)).catch(() => active && setNotice("标签关联读取失败。"));
+    return () => { active = false; };
+  }, [accountId, tagTargetId, tagTargetType, workspace]);
 
   useEffect(() => {
     if (workspace !== "timeline" || !accountId) {
@@ -308,6 +331,7 @@ export function App() {
 
   function selectContact(contact: Contact) {
     setSelected(contact);
+    if (tagTargetType === "contact") setTagTargetId(contact.id);
     setContext(null);
     setFactDraft(null);
     setEditingFactId(null);
@@ -339,8 +363,71 @@ export function App() {
     setWorkspace("timeline");
   }
 
+  function openTags() {
+    setWorkspace("tags");
+    setTagTargetType("contact");
+    setTagTargetId(selected?.id ?? contacts[0]?.id ?? "");
+  }
+
   function toggleTimelineKind(kind: TimelineKind) {
     setTimelineKinds((current) => current.includes(kind) ? (current.length === 1 ? current : current.filter((value) => value !== kind)) : [...current, kind]);
+  }
+
+  function tagTargetOptions(type: TagTargetType) {
+    if (type === "contact") return contacts.map((item) => ({ id: item.id, label: item.display_name }));
+    if (type === "fact") return facts.map((item) => ({ id: item.id, label: `${factKindLabels[item.kind]} · ${item.content.slice(0, 36)}` }));
+    if (type === "knowledge_card") return knowledgeCards.map((item) => ({ id: item.id, label: item.title }));
+    return actionItems.map((item) => ({ id: item.id, label: item.content.slice(0, 42) }));
+  }
+
+  function changeTagTargetType(type: TagTargetType) {
+    const options = tagTargetOptions(type);
+    setTagTargetType(type);
+    setTagTargetId(options[0]?.id ?? "");
+  }
+
+  async function saveTag() {
+    if (!accountId || !tagDraft?.name.trim()) return;
+    try {
+      const payload = { name: tagDraft.name.trim(), color: tagDraft.color };
+      const saved = editingTagId ? await api.updateTag(editingTagId, accountId, payload) : await api.createTag(accountId, payload);
+      setTags((current) => editingTagId ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved].sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN")));
+      setTagAssignmentId((current) => current || saved.id);
+      setTagDraft(null);
+      setEditingTagId(null);
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `标签未保存（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查标签名称。"}` : "标签未保存。 ");
+    }
+  }
+
+  async function removeTag(tagId: string) {
+    if (!accountId) return;
+    try {
+      await api.deleteTag(tagId, accountId);
+      const remaining = tags.filter((tag) => tag.id !== tagId);
+      setTags(remaining);
+      if (tagAssignmentId === tagId) setTagAssignmentId(remaining[0]?.id ?? "");
+      setTagLinks((current) => current.filter((link) => link.tag.id !== tagId));
+      if (editingTagId === tagId) { setEditingTagId(null); setTagDraft(null); }
+    } catch { setNotice("标签未删除。 "); }
+  }
+
+  async function addTagLink() {
+    if (!accountId || !tagAssignmentId || !tagTargetId) return;
+    try {
+      const link = await api.createTagLink(accountId, tagAssignmentId, tagTargetType, tagTargetId);
+      setTagLinks((current) => current.some((item) => item.id === link.id) ? current : [...current, link]);
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `标签关联未保存（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查目标对象。"}` : "标签关联未保存。 ");
+    }
+  }
+
+  async function removeTagLink(tagId: string) {
+    if (!accountId || !tagTargetId) return;
+    try {
+      await api.deleteTagLink(tagId, accountId, tagTargetType, tagTargetId);
+      setTagLinks((current) => current.filter((link) => link.tag.id !== tagId));
+    } catch { setNotice("标签关联未移除。 "); }
   }
 
   function editFact(fact: Fact) {
@@ -465,9 +552,18 @@ export function App() {
     {!accountId ? <p className="empty-message">请先明确选择本地账号，再查看本地时间线。</p> : timelineLoading ? <p className="empty-message">正在读取时间线…</p> : !timeline.length ? <p className="empty-message">当前筛选条件下暂无已归档消息或用户操作。</p> : <div className="timeline-list">{timeline.map((event) => { const source = event.message ?? event.evidence[0]; return <article className="timeline-row" key={`${event.kind}-${event.id}`}><div><strong>{timelineKindLabels[event.kind]} · {event.title}</strong><time>{formatMessageTime(event.occurred_at)}</time></div>{event.contact_display_name && <small>{event.contact_display_name}</small>}<p>{event.content}</p><footer>{source ? <button className="link" onClick={() => showContext(source)}>查看上下文</button> : <span className="manual-source">用户操作记录</span>}<span>{event.event_type}</span></footer></article>; })}</div>}
   </section>;
 
+  const tagOptions = tagTargetOptions(tagTargetType);
+  const tagPanel = <section className="card tag-card">
+    <header className="card-heading"><h2><LinkSimple weight="fill" />标签管理</h2><button className="link" onClick={() => { setTagDraft(emptyTag()); setEditingTagId(null); }}>新建标签</button></header>
+    <p>标签只由用户手动维护；不会从聊天、同步或资料中自动推断。</p>
+    {tagDraft && <form className="tag-editor" onSubmit={(event) => { event.preventDefault(); void saveTag(); }}><label>名称<input value={tagDraft.name} onChange={(event) => setTagDraft({ ...tagDraft, name: event.target.value })} maxLength={64} required /></label><label>颜色<input type="color" value={tagDraft.color} onChange={(event) => setTagDraft({ ...tagDraft, color: event.target.value })} /></label><footer><button type="button" className="link" onClick={() => { setTagDraft(null); setEditingTagId(null); }}>取消</button><button className="primary" type="submit">{editingTagId ? "保存修改" : "保存标签"}</button></footer></form>}
+    {!tags.length ? <p className="empty-message">尚无本地标签。</p> : <div className="tag-list">{tags.map((tag) => <article key={tag.id}><span className="tag-swatch" style={{ backgroundColor: tag.color }} /><strong>{tag.name}</strong><small>{formatMessageTime(tag.updated_at)}</small><span><button className="link" onClick={() => { setEditingTagId(tag.id); setTagDraft({ name: tag.name, color: tag.color }); }}>编辑</button><button className="link danger" onClick={() => void removeTag(tag.id)}>删除</button></span></article>)}</div>}
+    <section className="tag-links"><h3>关联本地对象</h3>{!tags.length ? <p className="empty-message">先创建标签，再关联本地对象。</p> : <><div className="tag-link-form"><label>标签<select value={tagAssignmentId} onChange={(event) => setTagAssignmentId(event.target.value)}>{tags.map((tag) => <option value={tag.id} key={tag.id}>{tag.name}</option>)}</select></label><label>对象类型<select value={tagTargetType} onChange={(event) => changeTagTargetType(event.target.value as TagTargetType)}><option value="contact">联系人</option><option value="fact">已确认事实</option><option value="knowledge_card">本地知识卡</option><option value="action_item">手动待办</option></select></label><label>对象<select value={tagTargetId} onChange={(event) => setTagTargetId(event.target.value)} disabled={!tagOptions.length}><option value="">{tagOptions.length ? "请选择对象" : "当前无可关联对象"}</option>{tagOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label><button className="primary" type="button" disabled={!tagAssignmentId || !tagTargetId} onClick={() => void addTagLink()}>添加关联</button></div>{!tagTargetId ? <p className="empty-message">选择一个本地对象后可查看已有标签。</p> : !tagLinks.length ? <p className="empty-message">该对象尚未关联标签。</p> : <div className="tag-link-list">{tagLinks.map((link) => <span key={link.id}><i className="tag-swatch" style={{ backgroundColor: link.tag.color }} />{link.tag.name}<button className="link danger" onClick={() => void removeTagLink(link.tag.id)}>移除</button></span>)}</div>}</>}</section>
+  </section>;
+
   return <div className="app-shell">
     <aside className="nav">
-      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item) => { const target = item === "关系记忆" ? "relationships" : item === "待办事项" ? "actions" : item === "全局搜索" ? "search" : item === "时间线" ? "timeline" : null; return <button className={target === workspace ? "active" : ""} key={item} disabled={!target} title={target ? undefined : `${item}正在开发中`} onClick={() => target === "search" ? openGlobalSearch() : target === "timeline" ? openTimeline() : target && setWorkspace(target)}><UsersThree size={18} />{item}{!target && <small>开发中</small>}</button>; })}</nav></div>
+      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item) => { const target = item === "关系记忆" ? "relationships" : item === "待办事项" ? "actions" : item === "全局搜索" ? "search" : item === "时间线" ? "timeline" : item === "标签管理" ? "tags" : null; return <button className={target === workspace ? "active" : ""} key={item} disabled={!target} title={target ? undefined : `${item}正在开发中`} onClick={() => target === "search" ? openGlobalSearch() : target === "timeline" ? openTimeline() : target === "tags" ? openTags() : target && setWorkspace(target)}><UsersThree size={18} />{item}{!target && <small>开发中</small>}</button>; })}</nav></div>
       <div className="local"><Database size={17} /><span>本地关系工作台<small>数据仅存本机</small></span></div>
     </aside>
     <section className="contacts">
@@ -478,11 +574,12 @@ export function App() {
     </section>
     <main>
       <header className="status"><div className="source-status"><span className={sourceReady ? "ok" : "warn"}>{sourceReady ? <CloudCheck weight="fill" /> : <WarningCircle weight="fill" />}{statusCopy}</span>{coverageWarning && <span className="coverage-warning"><WarningCircle weight="fill" />{coverageWarning}</span>}</div><button disabled={!canSync || syncing} onClick={() => sync("incremental")}>{syncing ? <CircleNotch className="spin" /> : <ArrowClockwise />}立即同步</button></header>
-      <section className="hero"><div className="profile-avatar">{selected ? avatar(selected) : <UsersThree />}</div><div><h1>{workspace === "search" ? "搜索本地已归档原文" : workspace === "timeline" ? "查看本地时间线" : selected?.display_name ?? "开始建立本地关系记忆"}</h1><p>{workspace === "search" ? "跨会话搜索仅在当前本地账号的已归档数据中进行。" : workspace === "timeline" ? "只读查看已归档原文与本地用户操作，所有内容均可追溯。" : selected ? contactSummary(selected) : accountSelectionRequired ? "请先明确选择本地账号；系统不会按目录、昵称或头像猜测。" : "先选择一个已确认的数据源账号，再开始首次归档。"}</p><div className="chips"><span>本地优先</span><span>原文可追溯</span><span>身份稳定</span></div></div><div className="hero-actions"><button className="secondary" onClick={() => sync("initial")} disabled={!canSync || syncing}>首次归档</button><button className="primary" onClick={openGlobalSearch}><MagnifyingGlass />搜索聊天记录</button></div></section>
+      <section className="hero"><div className="profile-avatar">{selected ? avatar(selected) : <UsersThree />}</div><div><h1>{workspace === "search" ? "搜索本地已归档原文" : workspace === "timeline" ? "查看本地时间线" : workspace === "tags" ? "管理本地标签" : selected?.display_name ?? "开始建立本地关系记忆"}</h1><p>{workspace === "search" ? "跨会话搜索仅在当前本地账号的已归档数据中进行。" : workspace === "timeline" ? "只读查看已归档原文与本地用户操作，所有内容均可追溯。" : workspace === "tags" ? "标签由用户维护，只关联当前账号的明确本地对象。" : selected ? contactSummary(selected) : accountSelectionRequired ? "请先明确选择本地账号；系统不会按目录、昵称或头像猜测。" : "先选择一个已确认的数据源账号，再开始首次归档。"}</p><div className="chips"><span>本地优先</span><span>原文可追溯</span><span>身份稳定</span></div></div><div className="hero-actions"><button className="secondary" onClick={() => sync("initial")} disabled={!canSync || syncing}>首次归档</button><button className="primary" onClick={openGlobalSearch}><MagnifyingGlass />搜索聊天记录</button></div></section>
       {workspace === "relationships" && <div className="tabs"><button className={activeTab === "overview" ? "active" : ""} aria-selected={activeTab === "overview"} onClick={() => setActiveTab("overview")}>关系总览</button><button className={activeTab === "evidence" ? "active" : ""} aria-selected={activeTab === "evidence"} onClick={() => setActiveTab("evidence")}>聊天证据</button><button disabled>待办事项</button><button disabled>标签与备注</button></div>}
       <div className="content">{workspace === "actions" && <section className="card evidence-card"><header className="card-heading"><h2>手动待办事项</h2><button className="link" onClick={() => beginActionItem()}>添加待办</button></header><p>仅由用户手动创建，不从聊天自动推断。</p>{actionDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveActionItem(); }}><label>内容<textarea value={actionDraft.content} onChange={(event) => setActionDraft({ ...actionDraft, content: event.target.value })} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={actionDraft.message_ids.includes(message.id)} onChange={() => setActionDraft((current) => current ? { ...current, message_ids: current.message_ids.includes(message.id) ? current.message_ids.filter((id) => id !== message.id) : [...current.message_ids, message.id] } : current)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>可从原文搜索结果或聊天证据添加原文关联。</p>}</fieldset><footer><button type="button" className="link" onClick={() => setActionDraft(null)}>取消</button><button className="primary" type="submit">保存待办</button></footer></form>}{!actionItems.length ? <p className="empty-message">尚无手动待办。</p> : <div className="fact-list">{actionItems.map((item) => <article className="fact-row" key={item.id}><div><strong>{item.status === "done" ? "已完成" : "待处理"}</strong><time>{formatMessageTime(item.updated_at)}</time></div><p>{item.content}</p><footer>{item.evidence.length ? <button className="link" onClick={() => showContext(item.evidence[0])}>原文证据 {item.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => void showActionHistory(item.id)}>历史</button><button className="link" onClick={() => void toggleActionItem(item)}>{item.status === "done" ? "恢复待处理" : "标记完成"}</button><button className="link danger" onClick={() => void removeActionItem(item.id)}>删除</button></span></footer></article>)}</div>}{actionHistoryItemId && <section className="fact-history"><h3>待办历史</h3>{!actionHistory.length ? <p className="empty-message">当前待办尚无操作历史。</p> : <div className="fact-list">{actionHistory.map((event) => <article className="fact-row history-row" key={event.id}><div><strong>{event.event_type === "created" ? "已创建" : event.event_type === "updated" ? "已更新" : "已删除"} · {event.status === "done" ? "已完成" : "待处理"}</strong><time>{formatMessageTime(event.occurred_at)}</time></div><p>{event.content}</p><footer>{event.evidence.length ? <button className="link" onClick={() => showContext(event.evidence[0])}>原文证据 {event.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span className="history-source">用户操作记录</span></footer></article>)}</div>}</section>}</section>}
         {workspace === "search" && globalSearchPanel}
         {workspace === "timeline" && timelinePanel}
+        {workspace === "tags" && tagPanel}
         {workspace === "relationships" && activeTab === "overview" && <>
           <section className="card profile-card"><header className="card-heading"><h2><UsersThree weight="fill" />联系人档案</h2><span><button className="link" disabled={!selected} onClick={() => setProfileHistoryOpen((current) => !current)}>资料历史</button><button className="link" disabled={!selected} onClick={beginProfileEdit}>编辑资料</button></span></header>{selected ? <><p>用户维护资料只保存在本机，不会被同步覆盖，也不会由聊天自动推断。</p><dl className="profile-fields"><div><dt>备注</dt><dd>{selected.user_remark_name ?? selected.remark_name ?? "暂无"}<small>{selected.user_remark_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>确认实名</dt><dd>{selected.user_confirmed_real_name ?? selected.confirmed_real_name ?? "暂无"}<small>{selected.user_confirmed_real_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>公司</dt><dd>{selected.effective_company ?? selected.company ?? "暂无"}<small>{selected.user_company ? "用户维护" : "采集资料"}</small></dd></div><div><dt>角色</dt><dd>{selected.effective_role ?? selected.role ?? "暂无"}<small>{selected.user_role ? "用户维护" : "采集资料"}</small></dd></div></dl>{profileDraft && <form className="profile-editor" onSubmit={(event) => { event.preventDefault(); void saveProfile(profileDraft); }}><label>备注<input value={profileDraft.remark_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, remark_name: event.target.value })} maxLength={255} /></label><label>确认实名<input value={profileDraft.confirmed_real_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, confirmed_real_name: event.target.value })} maxLength={255} /></label><label>公司<input value={profileDraft.company ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, company: event.target.value })} maxLength={255} /></label><label>角色<input value={profileDraft.role ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} maxLength={255} /></label><footer><button type="button" className="link" onClick={() => setProfileDraft(null)}>取消</button><button className="primary" type="submit" disabled={profileSaving}>{profileSaving ? "保存中…" : "保存资料"}</button></footer></form>}{!profileDraft && <button className="link clear-profile" disabled={profileSaving || ![selected.user_remark_name, selected.user_confirmed_real_name, selected.user_company, selected.user_role].some(Boolean)} onClick={() => void saveProfile(emptyProfile())}>清除用户维护</button>}{profileHistoryOpen && <section className="profile-history"><h3>资料历史</h3>{profileHistoryLoading ? <p className="empty-message">正在读取资料历史…</p> : !profileHistory.length ? <p className="empty-message">当前联系人尚无资料操作历史。</p> : <div className="profile-history-list">{profileHistory.map((event) => <article key={event.id}><strong>{profileSnapshot(event)}</strong><time>{formatMessageTime(event.occurred_at)}</time><span>用户操作记录</span></article>)}</div>}</section>}</> : <p className="empty-message">选择联系人后可维护本地资料。</p>}</section>
           <section className="card confirmed"><header className="card-heading"><h2><CheckCircle weight="fill" />已确认的事实</h2><span><button className="link" disabled={!selected} onClick={() => setHistoryOpen((current) => !current)}>事实历史</button><button className="link" disabled={!selected} onClick={() => beginFact()}>添加事实</button></span></header><p>仅由用户手动记录或确认；系统不会从聊天自动推断事实。</p>{factDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveFact(); }}><label>类型<select value={factDraft.kind} onChange={(event) => setFactDraft({ ...factDraft, kind: event.target.value as FactKind })}>{Object.entries(factKindLabels).map(([kind, label]) => <option value={kind} key={kind}>{label}</option>)}</select></label><label>内容<textarea value={factDraft.content} onChange={(event) => setFactDraft({ ...factDraft, content: event.target.value })} placeholder="输入用户确认的内容" maxLength={2000} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={factDraft.message_ids.includes(message.id)} onChange={() => toggleFactEvidence(message.id)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>无原文证据时将标记为“用户手动记录”。</p>}</fieldset><footer><button type="button" className="link" onClick={() => { setFactDraft(null); setEditingFactId(null); }}>取消</button><button className="primary" type="submit" disabled={factSaving || !factDraft.content.trim()}>{factSaving ? "保存中…" : editingFactId ? "保存修改" : "保存事实"}</button></footer></form>}{factsLoading ? <p className="empty-message">正在读取已确认事实…</p> : !facts.length ? <p className="empty-message">尚无已确认事实。可手动记录，或从聊天证据添加原文关联。</p> : <div className="fact-list">{facts.map((fact) => <article className="fact-row" key={fact.id}><div><strong>{factKindLabels[fact.kind]}</strong><time>更新于 {formatMessageTime(fact.updated_at)}</time></div><p>{fact.content}</p><footer>{fact.evidence.length ? <button className="link" onClick={() => showContext(fact.evidence[0])}>原文证据 {fact.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => editFact(fact)}>编辑</button><button className="link danger" onClick={() => void removeFact(fact.id)}>删除</button></span></footer></article>)}</div>}{historyOpen && <section className="fact-history"><h3>事实历史</h3>{historyLoading ? <p className="empty-message">正在读取事实历史…</p> : !factHistory.length ? <p className="empty-message">当前联系人尚无事实操作历史。</p> : <div className="fact-list">{factHistory.map((event) => <article className="fact-row history-row" key={event.id}><div><strong>{factHistoryLabels[event.event_type]} · {factKindLabels[event.kind]}</strong><time>{formatMessageTime(event.occurred_at)}</time></div><p>{event.content}</p><footer>{event.evidence.length ? <button className="link" onClick={() => showContext(event.evidence[0])}>原文证据 {event.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span className="history-source">用户操作记录</span></footer></article>)}</div>}</section>}</section>

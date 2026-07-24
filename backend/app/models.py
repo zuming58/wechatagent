@@ -277,6 +277,36 @@ class ActionItemHistoryEvidence(Base):
     message: Mapped[Message] = relationship()
 
 
+class Tag(Base):
+    __tablename__ = "tags"
+    __table_args__ = (
+        UniqueConstraint("account_id", "name", name="uq_tag_account_name"),
+        Index("ix_tag_account_name", "account_id", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class TagLink(Base):
+    __tablename__ = "tag_links"
+    __table_args__ = (
+        UniqueConstraint("tag_id", "target_type", "target_id", name="uq_tag_link_target"),
+        Index("ix_tag_link_account_target", "account_id", "target_type", "target_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), index=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)

@@ -32,6 +32,10 @@ export type MessageContext = { anchor_id: string; messages: Message[] };
 export type TimelineKind = "message" | "fact" | "profile" | "knowledge_card" | "action_item";
 export type TimelineEvent = { id: string; account_id: string; kind: TimelineKind; event_type: string; occurred_at: string; title: string; content: string; contact_id?: string | null; contact_display_name?: string | null; message?: Message | null; evidence: Message[] };
 export type TimelineFilters = { kinds?: TimelineKind[]; contact_id?: string; date_from?: string; date_to?: string; limit?: number };
+export type TagTargetType = "contact" | "fact" | "knowledge_card" | "action_item";
+export type Tag = { id: string; account_id: string; name: string; color: string; created_at: string; updated_at: string };
+export type TagWrite = { name: string; color: string };
+export type TagLink = { id: string; account_id: string; tag: Tag; target_type: TagTargetType; target_id: string; created_at: string };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
 export type SyncSchedule = {
   enabled: boolean;
@@ -132,6 +136,13 @@ export const api = {
     if (filters.limit) params.set("limit", String(filters.limit));
     return request<TimelineEvent[]>(`/timeline?${params.toString()}`);
   },
+  tags: (accountId: string) => request<Tag[]>(`/tags?account_id=${encodeURIComponent(accountId)}`),
+  createTag: (accountId: string, payload: TagWrite) => request<Tag>(`/tags?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
+  updateTag: (tagId: string, accountId: string, payload: TagWrite) => request<Tag>(`/tags/${encodeURIComponent(tagId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteTag: (tagId: string, accountId: string) => request<void>(`/tags/${encodeURIComponent(tagId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
+  tagLinks: (accountId: string, targetType: TagTargetType, targetId: string) => request<TagLink[]>(`/tags/links?account_id=${encodeURIComponent(accountId)}&target_type=${encodeURIComponent(targetType)}&target_id=${encodeURIComponent(targetId)}`),
+  createTagLink: (accountId: string, tagId: string, targetType: TagTargetType, targetId: string) => request<TagLink>(`/tags/links?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify({ tag_id: tagId, target_type: targetType, target_id: targetId }) }),
+  deleteTagLink: (tagId: string, accountId: string, targetType: TagTargetType, targetId: string) => request<void>(`/tags/${encodeURIComponent(tagId)}/links?account_id=${encodeURIComponent(accountId)}&target_type=${encodeURIComponent(targetType)}&target_id=${encodeURIComponent(targetId)}`, { method: "DELETE" }),
   search: (accountId: string, query: string, filters?: MessageSearchFilters) => {
     const params = new URLSearchParams({ account_id: accountId, q: query });
     for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));

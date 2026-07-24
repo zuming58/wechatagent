@@ -145,6 +145,35 @@ class TimelineEventResponse(BaseModel):
     evidence: list[MessageSearchItem] = []
 
 
+class TagWriteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class TagResponse(BaseModel):
+    id: str
+    account_id: str
+    name: str
+    color: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TagLinkWriteRequest(BaseModel):
+    tag_id: str
+    target_type: str = Field(pattern="^(contact|fact|knowledge_card|action_item)$")
+    target_id: str
+
+
+class TagLinkResponse(BaseModel):
+    id: str
+    account_id: str
+    tag: TagResponse
+    target_type: str
+    target_id: str
+    created_at: datetime
+
+
 class FactWriteRequest(BaseModel):
     kind: str = Field(pattern="^(company|role|need|concern|commitment)$")
     content: str = Field(min_length=1, max_length=2000)

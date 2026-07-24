@@ -10,7 +10,7 @@ from app.config import Settings
 from app.connectors.base import Connector, ConnectorBatch, SourceAccount, SourceProbe, StandardContact, StandardConversation, StandardMessage
 from app.connectors.synthetic import SyntheticConnector
 from app.main import create_app
-from app.models import Contact, Message, SyncShard
+from app.models import Contact, Message, SyncShard, TagLink
 
 
 class RecordingSyntheticConnector(SyntheticConnector):
@@ -612,6 +612,44 @@ def test_user_action_items_are_account_isolated_and_manually_completed(client):
     assert [event["event_type"] for event in history.json()] == ["deleted", "updated", "created"]
     assert all([event["evidence"][0]["id"] for event in history.json()])
     assert client.get(f"/api/v1/action-items/{item['id']}/history", params={"account_id": "other-account"}).status_code == 404
+
+
+def test_user_tags_are_account_isolated_and_link_only_existing_local_targets(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contact = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()[0]
+    message = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()[0]
+    fact = client.post(f"/api/v1/contacts/{contact['id']}/facts", params={"account_id": "dev-account"}, json={"kind": "need", "content": "Local requirement", "message_ids": [message["id"]]}).json()
+    card = client.post("/api/v1/knowledge-cards", params={"account_id": "dev-account"}, json={"card_type": "note", "title": "Local note", "content": "User-written", "message_ids": []}).json()
+    action = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Follow up", "status": "open", "message_ids": []}).json()
+
+    created = client.post("/api/v1/tags", params={"account_id": "dev-account"}, json={"name": "Priority", "color": "#1677FF"})
+    assert created.status_code == 201
+    tag = created.json()
+    assert tag["color"] == "#1677ff"
+    assert client.post("/api/v1/tags", params={"account_id": "dev-account"}, json={"name": "Priority", "color": "#1677ff"}).status_code == 409
+    updated = client.patch(f"/api/v1/tags/{tag['id']}", params={"account_id": "dev-account"}, json={"name": "Customer", "color": "#12A150"})
+    assert updated.status_code == 200
+    assert client.get("/api/v1/tags", params={"account_id": "dev-account"}).json()[0]["name"] == "Customer"
+
+    targets = [("contact", contact["id"]), ("fact", fact["id"]), ("knowledge_card", card["id"]), ("action_item", action["id"])]
+    for target_type, target_id in targets:
+        response = client.post("/api/v1/tags/links", params={"account_id": "dev-account"}, json={"tag_id": tag["id"], "target_type": target_type, "target_id": target_id})
+        assert response.status_code == 201
+        assert response.json()["tag"]["id"] == tag["id"]
+
+    links = client.get("/api/v1/tags/links", params={"account_id": "dev-account", "target_type": "fact", "target_id": fact["id"]})
+    assert links.status_code == 200
+    assert [item["tag"]["name"] for item in links.json()] == ["Customer"]
+    assert client.post("/api/v1/tags/links", params={"account_id": "dev-account"}, json={"tag_id": tag["id"], "target_type": "fact", "target_id": fact["id"]}).status_code == 409
+    assert client.post("/api/v1/tags/links", params={"account_id": "dev-account"}, json={"tag_id": tag["id"], "target_type": "fact", "target_id": "other-account-fact"}).status_code == 422
+    assert client.post("/api/v1/tags/links", params={"account_id": "another-account"}, json={"tag_id": tag["id"], "target_type": "contact", "target_id": contact["id"]}).status_code == 404
+
+    assert client.delete(f"/api/v1/tags/{tag['id']}/links", params={"account_id": "dev-account", "target_type": "contact", "target_id": contact["id"]}).status_code == 204
+    assert client.delete(f"/api/v1/action-items/{action['id']}", params={"account_id": "dev-account"}).status_code == 204
+    with database_session(client) as session:
+        assert session.scalar(select(func.count(TagLink.id)).where(TagLink.target_type == "action_item", TagLink.target_id == action["id"])) == 0
+    assert client.delete(f"/api/v1/tags/{tag['id']}", params={"account_id": "dev-account"}).status_code == 204
+    assert client.get("/api/v1/tags", params={"account_id": "dev-account"}).json() == []
 
 
 def test_timeline_merges_archived_messages_and_user_history_with_account_isolation(client):
