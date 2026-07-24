@@ -1,3 +1,4 @@
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timezone
@@ -11,7 +12,7 @@ from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
 from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
-from .schemas import AccountSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -45,6 +46,27 @@ def contact_response(contact: Contact) -> ContactResponse:
     )
 
 
+def attachment_summaries(serialized_metadata: str | None) -> list[AttachmentSummary]:
+    if not serialized_metadata:
+        return []
+    try:
+        metadata = json.loads(serialized_metadata)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    items = metadata if isinstance(metadata, list) else [metadata]
+    summaries: list[AttachmentSummary] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_name = next((item.get(key) for key in ("file_name", "filename", "name", "title") if isinstance(item.get(key), str)), None)
+        name = raw_name.replace("\\", "/").rsplit("/", 1)[-1] if raw_name else None
+        raw_size = item.get("size_bytes", item.get("size"))
+        size_bytes = raw_size if isinstance(raw_size, int) and raw_size >= 0 else None
+        mime_type = item.get("mime_type", item.get("mime"))
+        summaries.append(AttachmentSummary(name=name, mime_type=mime_type if isinstance(mime_type, str) else None, size_bytes=size_bytes))
+    return summaries
+
+
 def message_item(message: Message, conversation: Conversation, snippet: str | None = None) -> MessageSearchItem:
     return MessageSearchItem(
         id=message.id,
@@ -56,6 +78,7 @@ def message_item(message: Message, conversation: Conversation, snippet: str | No
         message_type=message.message_type,
         text_content=message.text_content,
         snippet=snippet or message.text_content,
+        attachments=attachment_summaries(message.attachment_metadata),
     )
 
 
@@ -445,7 +468,9 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         account_id: str,
         q: str,
         conversation_id: str | None = None,
+        contact_id: str | None = None,
         message_type: str | None = None,
+        has_attachment: bool | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
         limit: int = Query(100, ge=1, le=500),
@@ -456,9 +481,15 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if conversation_id:
             filters.append("m.conversation_id = :conversation_id")
             params["conversation_id"] = conversation_id
+        if contact_id:
+            contact = account_contact_or_404(db, contact_id, account_id)
+            filters.append("((c.conversation_type = 'private' AND c.source_id = :contact_source_id) OR (c.conversation_type = 'group' AND m.sender_id = :contact_source_id))")
+            params["contact_source_id"] = contact.source_id
         if message_type:
             filters.append("m.message_type = :message_type")
             params["message_type"] = message_type
+        if has_attachment is True:
+            filters.append("m.attachment_metadata IS NOT NULL")
         if date_from:
             filters.append("m.sent_at >= :date_from")
             params["date_from"] = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
@@ -467,7 +498,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             params["date_to"] = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
         rows = db.execute(text(f"""
             SELECT m.id, m.conversation_id, c.display_name, c.conversation_type,
-                   m.sender_display_name, m.sent_at, m.message_type, m.text_content,
+                   m.sender_display_name, m.sent_at, m.message_type, m.text_content, m.attachment_metadata,
                    snippet(messages_fts, 3, '<mark>', '</mark>', '…', 12) AS hit_snippet
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.message_id
@@ -476,7 +507,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             ORDER BY bm25(messages_fts), m.sent_at DESC
             LIMIT :limit
         """), params).mappings().all()
-        return [MessageSearchItem(id=row["id"], conversation_id=row["conversation_id"], conversation_name=row["display_name"], conversation_type=row["conversation_type"], sender_display_name=row["sender_display_name"], sent_at=row["sent_at"], message_type=row["message_type"], text_content=row["text_content"], snippet=row["hit_snippet"]) for row in rows]
+        return [MessageSearchItem(id=row["id"], conversation_id=row["conversation_id"], conversation_name=row["display_name"], conversation_type=row["conversation_type"], sender_display_name=row["sender_display_name"], sent_at=row["sent_at"], message_type=row["message_type"], text_content=row["text_content"], snippet=row["hit_snippet"], attachments=attachment_summaries(row["attachment_metadata"])) for row in rows]
 
     @app.get("/api/v1/messages/{message_id}/context", response_model=MessageContextResponse)
     def message_context(message_id: str, radius: int = Query(3, ge=1, le=20), db: Session = Depends(get_db)) -> MessageContextResponse:

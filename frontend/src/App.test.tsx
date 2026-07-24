@@ -223,6 +223,8 @@ describe("multi-account sync safety gate", () => {
     fireEvent.change(queryInput, { target: { value: "离线部署" } });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
 
+    await waitFor(() => expect(mockedApi.search).toHaveBeenCalledWith("account-b", "离线部署", {}));
+
     expect(await screen.findByText("离线部署的原文结果")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
     await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("search-message"));
@@ -324,5 +326,22 @@ describe("multi-account sync safety gate", () => {
     await waitFor(() => expect(mockedApi.updateContactProfile).toHaveBeenLastCalledWith("contact-zhang", "account-b", { remark_name: "", confirmed_real_name: "", company: "", role: "" }));
     fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
     expect(screen.queryByRole("heading", { name: "资料历史" })).not.toBeInTheDocument();
+  });
+
+  it("passes structured search filters and renders only safe attachment details", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const result = { id: "file-message", conversation_id: "private-1", conversation_name: "Synthetic Contact", conversation_type: "private", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T11:55:00Z", message_type: "file", text_content: "文件已发送", snippet: "文件已发送", attachments: [{ name: "报价方案.pdf", mime_type: "application/pdf", size_bytes: 1024 }] };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], search: [result] });
+
+    fireEvent.change(await screen.findByPlaceholderText("输入关键词后按 Enter"), { target: { value: "报价方案" } });
+    await screen.findByRole("button", { name: /Synthetic Contact/ });
+    await waitFor(() => expect(screen.getByLabelText("当前联系人")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("消息类型"), { target: { value: "file" } });
+    fireEvent.click(screen.getByLabelText("当前联系人"));
+    fireEvent.click(screen.getByLabelText("仅含附件"));
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+
+    await waitFor(() => expect(mockedApi.search).toHaveBeenCalledWith("account-b", "报价方案", { message_type: "file", contact_id: "contact-zhang", has_attachment: true }));
+    expect(await screen.findByText(/报价方案.pdf.*application\/pdf.*1024 B/)).toBeInTheDocument();
   });
 });

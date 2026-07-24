@@ -516,3 +516,48 @@ def test_non_synthetic_mode_never_starts_the_automatic_scheduler(tmp_path):
     assert response.json()["enabled"] is False
     assert connector.probe_calls == 0
     assert connector.collect_calls == 0
+
+
+def test_structured_search_filters_and_attachment_summaries_stay_local_and_sanitized(client):
+    sent_at = datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc)
+    account = SourceAccount(id="search-account", source_key="synthetic:search-account", display_name="Search synthetic account", selected=True)
+    batch = ConnectorBatch(
+        account=account,
+        contacts=[StandardContact("contact-a", remark_name="Contact A"), StandardContact("contact-b", remark_name="Contact B")],
+        conversations=[
+            StandardConversation("contact-a", "Contact A", "private", sent_at),
+            StandardConversation("group-a", "Synthetic group", "group", sent_at),
+            StandardConversation("contact-b", "Contact B", "private", sent_at),
+        ],
+        messages=[
+            StandardMessage("search-shard", "file-message", "contact-a", "Contact A", "private", "contact-a", "Contact A", sent_at, "incoming", "file", "文件已发送", attachment_metadata={"file_name": r"C:\synthetic\报价方案.pdf", "mime_type": "application/pdf", "size_bytes": 1024}),
+            StandardMessage("search-shard", "group-message", "group-a", "Synthetic group", "group", "contact-a", "Contact A", sent_at - timedelta(minutes=1), "incoming", "text", "报价方案请在群内确认"),
+            StandardMessage("search-shard", "other-message", "contact-b", "Contact B", "private", "contact-b", "Contact B", sent_at - timedelta(minutes=2), "incoming", "text", "报价方案由其他联系人发送"),
+        ],
+        watermark_by_shard={"search-shard": sent_at.isoformat()},
+        latest_by_shard={"search-shard": sent_at},
+    )
+    search_connector = FixedBatchConnector(batch)
+    search_connector.account = account
+    client.app.state.connector = search_connector
+    archived = client.post("/api/v1/sync", json={"account_id": account.id, "mode": "initial"})
+    assert archived.status_code == 200
+
+    contacts = client.get("/api/v1/contacts", params={"account_id": account.id}).json()
+    contact_a = next(item for item in contacts if item["source_id"] == "contact-a")
+    filtered = client.get("/api/v1/messages/search", params={"account_id": account.id, "q": "报价方案", "contact_id": contact_a["id"]})
+    assert filtered.status_code == 200
+    assert {item["id"] for item in filtered.json()} == {
+        next(item["id"] for item in client.get(f"/api/v1/contacts/{contact_a['id']}/messages", params={"account_id": account.id}).json() if item["text_content"] == "文件已发送"),
+        next(item["id"] for item in client.get(f"/api/v1/contacts/{contact_a['id']}/messages", params={"account_id": account.id}).json() if item["text_content"] == "报价方案请在群内确认"),
+    }
+
+    attachments_only = client.get("/api/v1/messages/search", params={"account_id": account.id, "q": "报价方案", "has_attachment": "true", "message_type": "file"})
+    assert attachments_only.status_code == 200
+    assert len(attachments_only.json()) == 1
+    attachment = attachments_only.json()[0]["attachments"][0]
+    assert attachment == {"name": "报价方案.pdf", "mime_type": "application/pdf", "size_bytes": 1024}
+    assert "C:" not in str(attachments_only.json())
+    assert "synthetic" not in str(attachments_only.json())
+
+    assert client.get("/api/v1/messages/search", params={"account_id": account.id, "q": "报价方案", "contact_id": "not-a-contact"}).status_code == 404

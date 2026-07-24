@@ -25,7 +25,9 @@ export type Contact = {
   avatar_ref?: string | null;
   last_message_at?: string | null;
 };
-export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
+export type Attachment = { name?: string | null; mime_type?: string | null; size_bytes?: number | null };
+export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string; attachments?: Attachment[] };
+export type MessageSearchFilters = { conversation_id?: string; contact_id?: string; message_type?: string; date_from?: string; date_to?: string; has_attachment?: boolean };
 export type MessageContext = { anchor_id: string; messages: Message[] };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
 export type SyncSchedule = {
@@ -99,7 +101,11 @@ export const api = {
   createFact: (contactId: string, accountId: string, payload: FactWrite) => request<Fact>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
   updateFact: (factId: string, accountId: string, payload: FactWrite) => request<Fact>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteFact: (factId: string, accountId: string) => request<void>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
-  search: (accountId: string, query: string) => request<Message[]>(`/messages/search?account_id=${encodeURIComponent(accountId)}&q=${encodeURIComponent(query)}`),
+  search: (accountId: string, query: string, filters?: MessageSearchFilters) => {
+    const params = new URLSearchParams({ account_id: accountId, q: query });
+    for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));
+    return request<Message[]>(`/messages/search?${params.toString()}`);
+  },
   messageContext: (messageId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context`),
   sync: (accountId: string, mode: "initial" | "incremental" = "incremental") => request<SyncRun>("/sync", { method: "POST", body: JSON.stringify({ account_id: accountId, mode }) }),
   syncRuns: (accountId: string) => request<SyncRun[]>(`/sync/runs?account_id=${encodeURIComponent(accountId)}`),

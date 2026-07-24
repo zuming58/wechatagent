@@ -67,6 +67,12 @@ class ContactResponse(BaseModel):
     last_message_at: datetime | None
 
 
+class AttachmentSummary(BaseModel):
+    name: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+
+
 class MessageSearchItem(BaseModel):
     id: str
     conversation_id: str
@@ -77,6 +83,7 @@ class MessageSearchItem(BaseModel):
     message_type: str
     text_content: str
     snippet: str
+    attachments: list[AttachmentSummary] = []
 
 
 class MessageContextResponse(BaseModel):

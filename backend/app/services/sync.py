@@ -25,6 +25,17 @@ def is_later(candidate: datetime, current: datetime | None, *, inclusive: bool =
     return candidate >= current if inclusive else candidate > current
 
 
+def searchable_message_content(text_content: str, attachment_metadata: dict | None) -> str:
+    """Index readable attachment labels without indexing paths or raw payloads."""
+    labels = [text_content]
+    if isinstance(attachment_metadata, dict):
+        for key in ("file_name", "filename", "name", "title"):
+            value = attachment_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                labels.append(value.replace("\\", "/").rsplit("/", 1)[-1])
+    return "\n".join(labels)
+
+
 class SyncService:
     def __init__(self, connector: Connector, overlap_seconds: int = 300) -> None:
         self.connector = connector
@@ -141,7 +152,7 @@ class SyncService:
             )
             session.add(message)
             session.flush()
-            session.execute(text("INSERT INTO messages_fts(message_id, account_id, conversation_id, text_content) VALUES (:id, :account, :conversation, :content)"), {"id": message.id, "account": message.account_id, "conversation": message.conversation_id, "content": message.text_content})
+            session.execute(text("INSERT INTO messages_fts(message_id, account_id, conversation_id, text_content) VALUES (:id, :account, :conversation, :content)"), {"id": message.id, "account": message.account_id, "conversation": message.conversation_id, "content": searchable_message_content(message.text_content, source.attachment_metadata)})
             inserted += 1
             committed_shards.add(source.source_shard_id)
 
