@@ -390,4 +390,37 @@ describe("multi-account sync safety gate", () => {
     expect(await screen.findByRole("heading", { name: "待办历史" })).toBeInTheDocument();
     expect(screen.getByText("已删除 · 已完成")).toBeInTheDocument();
   });
+
+  it("opens a cross-contact global search workspace and keeps context traceable", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const result = { id: "global-message", conversation_id: "group-1", conversation_name: "Synthetic Group", conversation_type: "group", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "Cross-contact source", snippet: "Cross-contact source" };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], search: [result], context: { anchor_id: result.id, messages: [result] } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "全局搜索" }));
+    expect(await screen.findByRole("heading", { name: "全局搜索" })).toBeInTheDocument();
+    expect(screen.getByText("当前账号全部已归档消息")).toBeInTheDocument();
+    expect(screen.getByLabelText("当前联系人")).not.toBeChecked();
+
+    fireEvent.change(screen.getByPlaceholderText("输入关键词后按 Enter"), { target: { value: "source" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(mockedApi.search).toHaveBeenCalledWith("account-b", "source", {}));
+    expect(await screen.findByText("Cross-contact source")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用于新事实" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("当前联系人"));
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(mockedApi.search).toHaveBeenLastCalledWith("account-b", "source", { contact_id: "contact-zhang" }));
+    expect(await screen.findByRole("button", { name: "用于新事实" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("global-message"));
+    expect(await screen.findByRole("heading", { name: "消息上下文" })).toBeInTheDocument();
+  });
+
+  it("marks unopened timeline and tag navigation as disabled", async () => {
+    renderWithSource(sourceStatus({ status: "connector_missing", reason: "Synthetic connector is unavailable." }));
+
+    expect(await screen.findByRole("button", { name: /时间线/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /标签管理/ })).toBeDisabled();
+  });
 });
