@@ -86,6 +86,7 @@ export type StorageStatus = { account_id: string; contacts: number; conversation
 export type BackupManifest = { account_id: string; generated_at: string; integrity_check: string; counts: Record<string, number> };
 export type FtsIndexStatus = { account_id: string; message_count: number; indexed_message_count: number; status: "ready" | "needs_rebuild" | "unavailable" };
 export type ArchiveCoverage = { account_id: string; contacts: number; conversations: number; messages: number; earliest_message_at?: string | null; latest_message_at?: string | null; integrity_check: string; indexed_message_count: number; index_status: "ready" | "needs_rebuild" | "unavailable"; last_sync_status?: string | null; last_sync_error_code?: string | null; last_sync_completed_at?: string | null };
+export type ArchiveConversation = { id: string; display_name: string; conversation_type: string; message_count: number; earliest_message_at: string; latest_message_at: string };
 export type AccountDeletionRequest = { id: string; account_id: string; confirmation_phrase: string; expires_at: string };
 export type PrivacySettings = { local_processing_acknowledged: boolean; real_collection_authorized: boolean; ai_processing_enabled: boolean; updated_at?: string | null };
 export type ActionItem = { id: string; account_id: string; content: string; status: "open" | "done"; due_at?: string | null; created_at: string; updated_at: string; evidence: Message[] };
@@ -130,6 +131,7 @@ export const api = {
   knowledgeCardHistory: (cardId: string, accountId: string) => request<KnowledgeCardHistoryEvent[]>(`/knowledge-cards/${encodeURIComponent(cardId)}/history?account_id=${encodeURIComponent(accountId)}`),
   storageStatus: (accountId: string) => request<StorageStatus>(`/storage/status?account_id=${encodeURIComponent(accountId)}`),
   archiveCoverage: (accountId: string) => request<ArchiveCoverage>(`/storage/archive-coverage?account_id=${encodeURIComponent(accountId)}`),
+  archiveConversations: (accountId: string, limit = 12) => request<ArchiveConversation[]>(`/storage/archive-conversations?account_id=${encodeURIComponent(accountId)}&limit=${limit}`),
   backupManifest: (accountId: string) => request<BackupManifest>(`/storage/backup-manifest?account_id=${encodeURIComponent(accountId)}`),
   ftsIndexStatus: (accountId: string) => request<FtsIndexStatus>(`/storage/index-status?account_id=${encodeURIComponent(accountId)}`),
   rebuildFtsIndex: (accountId: string) => request<FtsIndexStatus>(`/storage/rebuild-index?account_id=${encodeURIComponent(accountId)}`, { method: "POST" }),

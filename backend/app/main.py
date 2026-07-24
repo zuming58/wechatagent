@@ -13,7 +13,7 @@ from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, ensure_messages_fts, get_db, initialize_database
 from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, LocalPrivacySettings, Message, SyncRun, Tag, TagLink
-from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, ArchiveCoverageResponse, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, FtsIndexStatusResponse, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
+from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, ArchiveConversationResponse, ArchiveCoverageResponse, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, FtsIndexStatusResponse, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService, searchable_message_content
 
@@ -447,6 +447,37 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             last_sync_error_code=last_run.error_code if last_run and last_run.status == "completed_with_warning" else None,
             last_sync_completed_at=last_run.completed_at if last_run else None,
         )
+
+    @app.get("/api/v1/storage/archive-conversations", response_model=list[ArchiveConversationResponse])
+    def archive_conversations(account_id: str, limit: int = Query(default=12, ge=1, le=100), db: Session = Depends(get_db)) -> list[ArchiveConversationResponse]:
+        if not db.get(Account, account_id):
+            raise HTTPException(status_code=404, detail="account_not_found")
+        rows = db.execute(
+            select(
+                Conversation.id,
+                Conversation.display_name,
+                Conversation.conversation_type,
+                func.count(Message.id).label("message_count"),
+                func.min(Message.sent_at).label("earliest_message_at"),
+                func.max(Message.sent_at).label("latest_message_at"),
+            )
+            .join(Message, Message.conversation_id == Conversation.id)
+            .where(Conversation.account_id == account_id, Message.account_id == account_id)
+            .group_by(Conversation.id, Conversation.display_name, Conversation.conversation_type)
+            .order_by(func.max(Message.sent_at).desc(), Conversation.id.desc())
+            .limit(limit)
+        ).all()
+        return [
+            ArchiveConversationResponse(
+                id=row.id,
+                display_name=row.display_name,
+                conversation_type=row.conversation_type,
+                message_count=row.message_count,
+                earliest_message_at=row.earliest_message_at,
+                latest_message_at=row.latest_message_at,
+            )
+            for row in rows
+        ]
 
     @app.get("/api/v1/storage/backup-manifest", response_model=BackupManifestResponse)
     def backup_manifest(account_id: str, db: Session = Depends(get_db)) -> BackupManifestResponse:

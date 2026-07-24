@@ -30,6 +30,7 @@ vi.mock("./api", async () => {
       knowledgeCardHistory: vi.fn(),
       storageStatus: vi.fn(),
       archiveCoverage: vi.fn(),
+      archiveConversations: vi.fn(),
       backupManifest: vi.fn(),
       ftsIndexStatus: vi.fn(),
       rebuildFtsIndex: vi.fn(),
@@ -53,7 +54,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ArchiveCoverage, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type FtsIndexStatus, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ArchiveConversation, type ArchiveCoverage, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type FtsIndexStatus, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -83,6 +84,7 @@ function renderWithSource(source: SourceStatus, data: {
   privacy?: PrivacySettings;
   ftsIndexStatus?: FtsIndexStatus;
   archiveCoverage?: ArchiveCoverage;
+  archiveConversations?: ArchiveConversation[];
 } = {}) {
   mockedApi.privacySettings.mockResolvedValue(data.privacy ?? { local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
   mockedApi.updatePrivacySettings.mockResolvedValue({ local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
@@ -104,6 +106,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
   mockedApi.archiveCoverage.mockResolvedValue(data.archiveCoverage ?? { account_id: "account-b", contacts: 0, conversations: 0, messages: 0, earliest_message_at: null, latest_message_at: null, integrity_check: "ok", indexed_message_count: 0, index_status: "ready", last_sync_status: null, last_sync_error_code: null, last_sync_completed_at: null });
+  mockedApi.archiveConversations.mockResolvedValue(data.archiveConversations ?? []);
   mockedApi.backupManifest.mockResolvedValue({ account_id: "account-b", generated_at: "2026-07-24T12:00:00Z", integrity_check: "ok", counts: { contacts: 2, conversations: 1, messages: 4, facts: 1, knowledge_cards: 1, action_items: 1, tags: 1 } });
   mockedApi.ftsIndexStatus.mockResolvedValue(data.ftsIndexStatus ?? { account_id: "account-b", message_count: 0, indexed_message_count: 0, status: "ready" });
   mockedApi.rebuildFtsIndex.mockResolvedValue({ account_id: "account-b", message_count: 4, indexed_message_count: 4, status: "ready" });
@@ -616,5 +619,24 @@ describe("multi-account sync safety gate", () => {
     expect(screen.getByText(/最近同步：completed_with_warning/)).toBeInTheDocument();
     expect(screen.getByText("需关注：possibly_stale")).toBeInTheDocument();
     expect(screen.queryByText("Synthetic message body")).not.toBeInTheDocument();
+  });
+
+  it("loads the archived conversation list only when the user opens it", async () => {
+    renderWithSource(
+      sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }),
+      {
+        archiveConversations: [
+          { id: "conversation-newest", display_name: "Synthetic Project Group", conversation_type: "group", message_count: 4, earliest_message_at: "2026-07-20T08:00:00Z", latest_message_at: "2026-07-24T12:30:00Z" },
+        ],
+      },
+    );
+
+    await screen.findByRole("button", { name: "查看归档范围" });
+    expect(mockedApi.archiveConversations).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "查看归档范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+
+    await waitFor(() => expect(mockedApi.archiveConversations).toHaveBeenCalledWith("account-b"));
+    expect(await screen.findByText(/Synthetic Project Group.*群聊.*4 条/)).toBeInTheDocument();
   });
 });

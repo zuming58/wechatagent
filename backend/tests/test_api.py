@@ -656,6 +656,22 @@ def test_archive_coverage_reports_only_the_selected_account(client):
     assert client.get("/api/v1/storage/archive-coverage", params={"account_id": "another-account"}).status_code == 404
 
 
+def test_archive_conversations_are_account_scoped_ordered_and_limited(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+
+    conversations = client.get("/api/v1/storage/archive-conversations", params={"account_id": "dev-account", "limit": 2})
+
+    assert conversations.status_code == 200
+    payload = conversations.json()
+    assert [item["display_name"] for item in payload] == ["张工", "工厂知识库试点群"]
+    assert [item["message_count"] for item in payload] == [3, 1]
+    assert [item["conversation_type"] for item in payload] == ["private", "group"]
+    assert all(item["earliest_message_at"] and item["latest_message_at"] for item in payload)
+    assert all("source_id" not in item and "text_content" not in item for item in payload)
+
+    assert client.get("/api/v1/storage/archive-conversations", params={"account_id": "another-account"}).status_code == 404
+
+
 def test_fts_index_health_and_rebuild_preserve_raw_messages(client):
     client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     ready = client.get("/api/v1/storage/index-status", params={"account_id": "dev-account"})

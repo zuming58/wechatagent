@@ -85,6 +85,15 @@ class ArchiveCoverageResponse(BaseModel):
     last_sync_completed_at: datetime | None = None
 
 
+class ArchiveConversationResponse(BaseModel):
+    id: str
+    display_name: str
+    conversation_type: str
+    message_count: int
+    earliest_message_at: datetime
+    latest_message_at: datetime
+
+
 class AccountDeletionRequestResponse(BaseModel):
     id: str
     account_id: str
