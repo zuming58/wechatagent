@@ -29,6 +29,7 @@ vi.mock("./api", async () => {
       deleteKnowledgeCard: vi.fn(),
       knowledgeCardHistory: vi.fn(),
       storageStatus: vi.fn(),
+      archiveCoverage: vi.fn(),
       backupManifest: vi.fn(),
       ftsIndexStatus: vi.fn(),
       rebuildFtsIndex: vi.fn(),
@@ -52,7 +53,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type FtsIndexStatus, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ArchiveCoverage, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type FtsIndexStatus, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -81,6 +82,7 @@ function renderWithSource(source: SourceStatus, data: {
   tagLinks?: TagLink[];
   privacy?: PrivacySettings;
   ftsIndexStatus?: FtsIndexStatus;
+  archiveCoverage?: ArchiveCoverage;
 } = {}) {
   mockedApi.privacySettings.mockResolvedValue(data.privacy ?? { local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
   mockedApi.updatePrivacySettings.mockResolvedValue({ local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
@@ -101,6 +103,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.syncSchedule.mockResolvedValue({ enabled: true, interval_seconds: 300 });
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
+  mockedApi.archiveCoverage.mockResolvedValue(data.archiveCoverage ?? { account_id: "account-b", contacts: 0, conversations: 0, messages: 0, earliest_message_at: null, latest_message_at: null, integrity_check: "ok", indexed_message_count: 0, index_status: "ready", last_sync_status: null, last_sync_error_code: null, last_sync_completed_at: null });
   mockedApi.backupManifest.mockResolvedValue({ account_id: "account-b", generated_at: "2026-07-24T12:00:00Z", integrity_check: "ok", counts: { contacts: 2, conversations: 1, messages: 4, facts: 1, knowledge_cards: 1, action_items: 1, tags: 1 } });
   mockedApi.ftsIndexStatus.mockResolvedValue(data.ftsIndexStatus ?? { account_id: "account-b", message_count: 0, indexed_message_count: 0, status: "ready" });
   mockedApi.rebuildFtsIndex.mockResolvedValue({ account_id: "account-b", message_count: 4, indexed_message_count: 4, status: "ready" });
@@ -582,5 +585,36 @@ describe("multi-account sync safety gate", () => {
     await waitFor(() => expect(mockedApi.rebuildFtsIndex).toHaveBeenCalledWith("account-b"));
     expect(mockedApi.sync).not.toHaveBeenCalled();
     expect(await screen.findByText(/全文索引：正常；原始消息 4，已索引 4/)).toBeInTheDocument();
+  });
+
+  it("shows account-scoped archive coverage without exposing message content", async () => {
+    renderWithSource(
+      sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }),
+      {
+        archiveCoverage: {
+          account_id: "account-b",
+          contacts: 3,
+          conversations: 2,
+          messages: 5,
+          earliest_message_at: "2026-07-20T08:00:00Z",
+          latest_message_at: "2026-07-24T12:30:00Z",
+          integrity_check: "ok",
+          indexed_message_count: 5,
+          index_status: "ready",
+          last_sync_status: "completed_with_warning",
+          last_sync_error_code: "possibly_stale",
+          last_sync_completed_at: "2026-07-24T12:31:00Z",
+        },
+      },
+    );
+
+    expect(await screen.findByText(/已归档消息 5 条.*会话 2 个.*联系人 3 个/)).toBeInTheDocument();
+    await waitFor(() => expect(mockedApi.archiveCoverage).toHaveBeenCalledWith("account-b"));
+    fireEvent.click(screen.getByRole("button", { name: "查看归档范围" }));
+
+    expect(await screen.findByText(/数据库完整性：正常/)).toBeInTheDocument();
+    expect(screen.getByText(/最近同步：completed_with_warning/)).toBeInTheDocument();
+    expect(screen.getByText("需关注：possibly_stale")).toBeInTheDocument();
+    expect(screen.queryByText("Synthetic message body")).not.toBeInTheDocument();
   });
 });

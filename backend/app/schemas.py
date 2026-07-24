@@ -70,6 +70,21 @@ class FtsIndexStatusResponse(BaseModel):
     status: str
 
 
+class ArchiveCoverageResponse(BaseModel):
+    account_id: str
+    contacts: int
+    conversations: int
+    messages: int
+    earliest_message_at: datetime | None = None
+    latest_message_at: datetime | None = None
+    integrity_check: str
+    indexed_message_count: int
+    index_status: str
+    last_sync_status: str | None = None
+    last_sync_error_code: str | None = None
+    last_sync_completed_at: datetime | None = None
+
+
 class AccountDeletionRequestResponse(BaseModel):
     id: str
     account_id: str

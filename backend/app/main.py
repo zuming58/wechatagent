@@ -13,7 +13,7 @@ from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, ensure_messages_fts, get_db, initialize_database
 from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, LocalPrivacySettings, Message, SyncRun, Tag, TagLink
-from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, FtsIndexStatusResponse, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
+from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, ArchiveCoverageResponse, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, FtsIndexStatusResponse, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService, searchable_message_content
 
@@ -413,6 +413,39 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             facts=db.scalar(select(func.count(Fact.id)).where(Fact.account_id == account_id)) or 0,
             knowledge_cards=db.scalar(select(func.count(KnowledgeCard.id)).where(KnowledgeCard.account_id == account_id)) or 0,
             integrity_check=str(integrity),
+        )
+
+    @app.get("/api/v1/storage/archive-coverage", response_model=ArchiveCoverageResponse)
+    def archive_coverage(account_id: str, db: Session = Depends(get_db)) -> ArchiveCoverageResponse:
+        if not db.get(Account, account_id):
+            raise HTTPException(status_code=404, detail="account_not_found")
+        integrity = str(db.execute(text("PRAGMA integrity_check")).scalar() or "unknown")
+        message_count = db.scalar(select(func.count(Message.id)).where(Message.account_id == account_id)) or 0
+        try:
+            indexed_message_count = db.execute(text("SELECT count(*) FROM messages_fts WHERE account_id = :account_id"), {"account_id": account_id}).scalar() or 0
+            index_status = "ready" if message_count == indexed_message_count else "needs_rebuild"
+        except OperationalError:
+            indexed_message_count = 0
+            index_status = "unavailable"
+        last_run = db.scalar(
+            select(SyncRun)
+            .where(SyncRun.account_id == account_id)
+            .order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+            .limit(1)
+        )
+        return ArchiveCoverageResponse(
+            account_id=account_id,
+            contacts=db.scalar(select(func.count(Contact.id)).where(Contact.account_id == account_id)) or 0,
+            conversations=db.scalar(select(func.count(Conversation.id)).where(Conversation.account_id == account_id)) or 0,
+            messages=message_count,
+            earliest_message_at=db.scalar(select(func.min(Message.sent_at)).where(Message.account_id == account_id)),
+            latest_message_at=db.scalar(select(func.max(Message.sent_at)).where(Message.account_id == account_id)),
+            integrity_check=integrity,
+            indexed_message_count=indexed_message_count,
+            index_status=index_status,
+            last_sync_status=last_run.status if last_run else None,
+            last_sync_error_code=last_run.error_code if last_run and last_run.status == "completed_with_warning" else None,
+            last_sync_completed_at=last_run.completed_at if last_run else None,
         )
 
     @app.get("/api/v1/storage/backup-manifest", response_model=BackupManifestResponse)

@@ -634,6 +634,28 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
     assert other.json()["messages"] == 0
 
 
+def test_archive_coverage_reports_only_the_selected_account(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+
+    coverage = client.get("/api/v1/storage/archive-coverage", params={"account_id": "dev-account"})
+
+    assert coverage.status_code == 200
+    payload = coverage.json()
+    assert payload["account_id"] == "dev-account"
+    assert payload["contacts"] == 3
+    assert payload["conversations"] == 3
+    assert payload["messages"] == 5
+    assert payload["earliest_message_at"] is not None
+    assert payload["latest_message_at"] is not None
+    assert payload["index_status"] == "ready"
+    assert payload["indexed_message_count"] == 5
+    assert payload["integrity_check"] == "ok"
+    assert payload["last_sync_status"] == "completed"
+    assert payload["last_sync_error_code"] is None
+
+    assert client.get("/api/v1/storage/archive-coverage", params={"account_id": "another-account"}).status_code == 404
+
+
 def test_fts_index_health_and_rebuild_preserve_raw_messages(client):
     client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     ready = client.get("/api/v1/storage/index-status", params={"account_id": "dev-account"})

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type FtsIndexStatus, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type PrivacySettings, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
+import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type ArchiveCoverage, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type FtsIndexStatus, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type PrivacySettings, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
 import "./data-management.css";
 import "./privacy.css";
 
@@ -93,6 +93,9 @@ export function App() {
   const [knowledgeHistory, setKnowledgeHistory] = useState<KnowledgeCardHistoryEvent[]>([]);
   const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [archiveCoverage, setArchiveCoverage] = useState<ArchiveCoverage | null>(null);
+  const [archiveCoverageOpen, setArchiveCoverageOpen] = useState(false);
+  const [archiveCoverageLoading, setArchiveCoverageLoading] = useState(false);
   const [backupManifest, setBackupManifest] = useState<BackupManifest | null>(null);
   const [ftsIndexStatus, setFtsIndexStatus] = useState<FtsIndexStatus | null>(null);
   const [ftsRebuilding, setFtsRebuilding] = useState(false);
@@ -200,8 +203,9 @@ export function App() {
   }, [accountId]);
 
   useEffect(() => {
-    if (!accountId) { setStorage(null); setBackupManifest(null); setFtsIndexStatus(null); setDeletionRequest(null); setDeletionConfirmation(""); return; }
+    if (!accountId) { setStorage(null); setArchiveCoverage(null); setArchiveCoverageOpen(false); setBackupManifest(null); setFtsIndexStatus(null); setDeletionRequest(null); setDeletionConfirmation(""); return; }
     Promise.resolve(api.storageStatus(accountId)).then((value) => value && setStorage(value)).catch(() => setNotice("存储状态读取失败。"));
+    void refreshArchiveCoverage();
     Promise.resolve(api.ftsIndexStatus(accountId)).then((value) => value && setFtsIndexStatus(value)).catch(() => setNotice("全文索引状态读取失败。"));
   }, [accountId]);
 
@@ -296,6 +300,19 @@ export function App() {
     return () => { active = false; };
   }, [accountId, profileHistoryOpen, selected?.id]);
 
+  async function refreshArchiveCoverage() {
+    if (!accountId) return;
+    setArchiveCoverageLoading(true);
+    try {
+      setArchiveCoverage(await api.archiveCoverage(accountId));
+    } catch (error) {
+      setArchiveCoverage(null);
+      setNotice(error instanceof LocalApiError ? `归档范围读取失败（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查当前账号。"}` : "归档范围读取失败，请检查本地 API 状态。");
+    } finally {
+      setArchiveCoverageLoading(false);
+    }
+  }
+
   async function sync(mode: "initial" | "incremental") {
     if (!canSync) return;
     setSyncing(true);
@@ -307,6 +324,7 @@ export function App() {
       const refreshed = await api.contacts(accountId, query);
       setContacts(refreshed);
       setSelected((current) => refreshed.find((item) => item.id === current?.id) ?? refreshed[0] ?? null);
+      await refreshArchiveCoverage();
     } catch (error) {
       if (error instanceof LocalApiError) {
         setNotice(`同步未完成（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查数据源状态。"}`);
@@ -490,6 +508,7 @@ export function App() {
     try {
       const rebuilt = await api.rebuildFtsIndex(accountId);
       setFtsIndexStatus(rebuilt);
+      await refreshArchiveCoverage();
       setNotice(`全文索引已重建：${rebuilt.indexed_message_count} 条本地消息已索引，原始消息未被修改。`);
     } catch (error) {
       setNotice(error instanceof LocalApiError ? `全文索引未重建（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请稍后重试。"}` : "全文索引未重建。");
@@ -530,6 +549,8 @@ export function App() {
       setContacts([]);
       setSelected(null);
       setStorage(null);
+      setArchiveCoverage(null);
+      setArchiveCoverageOpen(false);
       setBackupManifest(null);
       setDeletionRequest(null);
       setDeletionConfirmation("");
@@ -740,6 +761,7 @@ export function App() {
         {workspace === "relationships" && activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。", true)}</div></section>}
         {context && <section className="card context-card" ref={contextRef}><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}
         <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}{schedule && <div className="schedule-state"><strong>{schedule.enabled ? `自动增量同步已启用（每 ${Math.round(schedule.interval_seconds / 60)} 分钟）` : "自动增量同步未启用"}</strong><span>{schedule.enabled ? "仅对已首次归档的合成账号生效。" : schedule.reason}</span></div>}{storage && <div className="recent-sync"><strong>本地存储 · {storage.integrity_check === "ok" ? "完整性正常" : storage.integrity_check}</strong><span>消息 {storage.messages} · 联系人 {storage.contacts} · 事实 {storage.facts} · 知识卡 {storage.knowledge_cards}</span></div>}{syncRuns.length > 0 && <div className="recent-sync"><strong>最近同步</strong>{syncRuns.slice(0, 3).map((run) => <span key={run.id}>{syncRunSummary(run)}</span>)}</div>}<p>{contextLoading ? "正在读取消息上下文…" : "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
+        {archiveCoverage && <section className="card archive-coverage"><header className="card-heading"><h2><Database weight="fill" />归档范围与健康度</h2><span><button className="link" onClick={() => { setArchiveCoverageOpen((current) => !current); void refreshArchiveCoverage(); }}>{archiveCoverageOpen ? "收起范围" : "查看归档范围"}</button></span></header><p>只汇总当前本地账号的已归档数量和时间范围，不展示聊天原文。</p><div className="recent-sync"><strong>已归档消息 {archiveCoverage.messages} 条 · 会话 {archiveCoverage.conversations} 个 · 联系人 {archiveCoverage.contacts} 个</strong><span>全文索引：{archiveCoverage.index_status === "ready" ? "正常" : archiveCoverage.index_status === "needs_rebuild" ? "需要重建" : "不可用"}；已索引 {archiveCoverage.indexed_message_count} 条。</span></div>{archiveCoverageOpen && <div className="recent-sync">{archiveCoverageLoading ? <span>正在刷新归档范围…</span> : <><strong>时间范围：{formatMessageTime(archiveCoverage.earliest_message_at)} 至 {formatMessageTime(archiveCoverage.latest_message_at)}</strong><span>数据库完整性：{archiveCoverage.integrity_check === "ok" ? "正常" : archiveCoverage.integrity_check}</span><span>{archiveCoverage.last_sync_status ? `最近同步：${archiveCoverage.last_sync_status}${archiveCoverage.last_sync_completed_at ? ` · ${formatMessageTime(archiveCoverage.last_sync_completed_at)}` : ""}` : "尚无同步记录。"}</span>{archiveCoverage.last_sync_error_code && <span>需关注：{archiveCoverage.last_sync_error_code}</span>}</>}</div>}</section>}
         {dataManagementPanel}
       </div>
     </main>
