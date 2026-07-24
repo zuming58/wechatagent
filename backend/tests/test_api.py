@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+from sqlalchemy import create_engine, func, inspect, select, text
 
 from app.config import Settings
 from app.connectors.base import Connector, ConnectorBatch, SourceAccount, SourceProbe, StandardContact, StandardConversation, StandardMessage
@@ -600,3 +602,15 @@ def test_user_action_items_are_account_isolated_and_manually_completed(client):
     assert completed.json()["status"] == "done"
     assert client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "other-account"}, json={"content": "No", "status": "done"}).status_code == 404
     assert client.delete(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}).status_code == 204
+
+
+def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):
+    database_path = tmp_path / "migrations.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path}")
+    try:
+        assert {"accounts", "facts", "knowledge_cards", "action_items"}.issubset(set(inspect(engine).get_table_names()))
+    finally:
+        engine.dispose()
