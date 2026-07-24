@@ -937,8 +937,23 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         limit: int = Query(100, ge=1, le=500),
         db: Session = Depends(get_db),
     ) -> list[MessageSearchItem]:
-        filters = ["messages_fts.account_id = :account_id", "messages_fts MATCH :query"]
-        params: dict[str, object] = {"account_id": account_id, "query": q, "limit": limit}
+        query = q.strip()
+        use_fts = len(query) >= 3
+        if use_fts:
+            filters = ["messages_fts.account_id = :account_id", "messages_fts MATCH :query"]
+            params: dict[str, object] = {"account_id": account_id, "query": query, "limit": limit}
+            from_clause = """FROM messages_fts
+                JOIN messages m ON m.id = messages_fts.message_id"""
+            hit_snippet = "snippet(messages_fts, 3, '<mark>', '</mark>', '…', 12)"
+            ordering = "bm25(messages_fts), m.sent_at DESC"
+        else:
+            # FTS5 trigram cannot match queries shorter than three characters.
+            # Keep short Chinese keywords searchable without weakening account filters.
+            filters = ["m.account_id = :account_id", "(m.text_content LIKE :query_pattern OR m.attachment_metadata LIKE :query_pattern)"]
+            params = {"account_id": account_id, "query_pattern": f"%{query}%", "limit": limit}
+            from_clause = "FROM messages m"
+            hit_snippet = "m.text_content"
+            ordering = "m.sent_at DESC"
         if conversation_id:
             filters.append("m.conversation_id = :conversation_id")
             params["conversation_id"] = conversation_id
@@ -960,12 +975,11 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         rows = db.execute(text(f"""
             SELECT m.id, m.conversation_id, c.display_name, c.conversation_type,
                    m.sender_display_name, m.sent_at, m.message_type, m.text_content, m.attachment_metadata,
-                   snippet(messages_fts, 3, '<mark>', '</mark>', '…', 12) AS hit_snippet
-            FROM messages_fts
-            JOIN messages m ON m.id = messages_fts.message_id
+                   {hit_snippet} AS hit_snippet
+            {from_clause}
             JOIN conversations c ON c.id = m.conversation_id
             WHERE {' AND '.join(filters)}
-            ORDER BY bm25(messages_fts), m.sent_at DESC
+            ORDER BY {ordering}
             LIMIT :limit
         """), params).mappings().all()
         return [MessageSearchItem(id=row["id"], conversation_id=row["conversation_id"], conversation_name=row["display_name"], conversation_type=row["conversation_type"], sender_display_name=row["sender_display_name"], sent_at=row["sent_at"], message_type=row["message_type"], text_content=row["text_content"], snippet=row["hit_snippet"], attachments=attachment_summaries(row["attachment_metadata"])) for row in rows]

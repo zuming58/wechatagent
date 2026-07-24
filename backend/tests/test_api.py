@@ -156,6 +156,13 @@ def test_idempotent_import_and_search_context(client):
     assert len(search.json()) == 1
     assert "离线部署" in search.json()[0]["text_content"]
 
+    short_keyword = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "方案"})
+    assert short_keyword.status_code == 200
+    assert [item["text_content"] for item in short_keyword.json()] == [
+        "下周二上午把方案细节再过一遍。",
+        "收到，我整理方案和并发测试数据。",
+    ]
+
     message_id = search.json()[0]["id"]
     context = client.get(f"/api/v1/messages/{message_id}/context", params={"account_id": "dev-account", "radius": 2})
     assert context.status_code == 200
