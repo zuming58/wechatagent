@@ -587,3 +587,16 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
     assert status.json() == {"account_id": "dev-account", "contacts": 3, "conversations": 3, "messages": 5, "facts": 0, "knowledge_cards": 0, "integrity_check": "ok"}
     other = client.get("/api/v1/storage/status", params={"account_id": "other-account"})
     assert other.json()["messages"] == 0
+
+
+def test_user_action_items_are_account_isolated_and_manually_completed(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    created = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "open"})
+    assert created.status_code == 201
+    item = created.json()
+    assert client.get("/api/v1/action-items", params={"account_id": "dev-account", "status": "open"}).json()[0]["id"] == item["id"]
+    completed = client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "done"})
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "done"
+    assert client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "other-account"}, json={"content": "No", "status": "done"}).status_code == 404
+    assert client.delete(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}).status_code == 204

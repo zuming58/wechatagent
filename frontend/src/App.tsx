@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemWrite, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 const factKindLabels: Record<FactKind, string> = {
@@ -75,6 +75,9 @@ export function App() {
   const [knowledgeHistory, setKnowledgeHistory] = useState<KnowledgeCardHistoryEvent[]>([]);
   const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [actionItems, setActionItems] = useState<ActionItem[]>([]);
+  const [actionDraft, setActionDraft] = useState<ActionItemWrite | null>(null);
+  const [showActions, setShowActions] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -134,6 +137,11 @@ export function App() {
     let active = true;
     Promise.resolve(api.syncRuns(accountId)).then((items) => active && setSyncRuns(items ?? [])).catch(() => active && setNotice("同步记录读取失败。"));
     return () => { active = false; };
+  }, [accountId]);
+
+  useEffect(() => {
+    if (!accountId) { setActionItems([]); return; }
+    Promise.resolve(api.actionItems(accountId)).then((items) => items && setActionItems(items)).catch(() => setNotice("待办读取失败。"));
   }, [accountId]);
 
   useEffect(() => {
@@ -348,6 +356,24 @@ export function App() {
     catch { setNotice("知识卡未删除。 "); }
   }
 
+  async function saveActionItem() {
+    if (!accountId || !actionDraft?.content.trim()) return;
+    try { const saved = await api.createActionItem(accountId, { ...actionDraft, content: actionDraft.content.trim() }); setActionItems((current) => [saved, ...current]); setActionDraft(null); }
+    catch { setNotice("待办未保存。 "); }
+  }
+
+  async function toggleActionItem(item: ActionItem) {
+    if (!accountId) return;
+    try { const saved = await api.updateActionItem(item.id, accountId, { content: item.content, status: item.status === "open" ? "done" : "open", due_at: item.due_at }); setActionItems((current) => current.map((entry) => entry.id === saved.id ? saved : entry)); }
+    catch { setNotice("待办状态未更新。 "); }
+  }
+
+  async function removeActionItem(itemId: string) {
+    if (!accountId) return;
+    try { await api.deleteActionItem(itemId, accountId); setActionItems((current) => current.filter((item) => item.id !== itemId)); }
+    catch { setNotice("待办未删除。 "); }
+  }
+
   function toggleKnowledgeEvidence(messageId: string) {
     setKnowledgeDraft((current) => current ? { ...current, message_ids: current.message_ids.includes(messageId) ? current.message_ids.filter((id) => id !== messageId) : [...current.message_ids, messageId] } : current);
   }
@@ -370,7 +396,7 @@ export function App() {
 
   return <div className="app-shell">
     <aside className="nav">
-      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item, index) => <button className={index === 0 ? "active" : ""} key={item}><UsersThree size={18} />{item}</button>)}</nav></div>
+      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item, index) => <button className={showActions ? (item === "待办事项" ? "active" : "") : (index === 0 ? "active" : "")} key={item} onClick={() => item === "待办事项" ? setShowActions(true) : item === "关系记忆" && setShowActions(false)}><UsersThree size={18} />{item}</button>)}</nav></div>
       <div className="local"><Database size={17} /><span>本地关系工作台<small>数据仅存本机</small></span></div>
     </aside>
     <section className="contacts">
@@ -383,7 +409,7 @@ export function App() {
       <header className="status"><div className="source-status"><span className={sourceReady ? "ok" : "warn"}>{sourceReady ? <CloudCheck weight="fill" /> : <WarningCircle weight="fill" />}{statusCopy}</span>{coverageWarning && <span className="coverage-warning"><WarningCircle weight="fill" />{coverageWarning}</span>}</div><button disabled={!canSync || syncing} onClick={() => sync("incremental")}>{syncing ? <CircleNotch className="spin" /> : <ArrowClockwise />}立即同步</button></header>
       <section className="hero"><div className="profile-avatar">{selected ? avatar(selected) : <UsersThree />}</div><div><h1>{selected?.display_name ?? "开始建立本地关系记忆"}</h1><p>{selected ? contactSummary(selected) : accountSelectionRequired ? "请先明确选择本地账号；系统不会按目录、昵称或头像猜测。" : "先选择一个已确认的数据源账号，再开始首次归档。"}</p><div className="chips"><span>本地优先</span><span>原文可追溯</span><span>身份稳定</span></div></div><div className="hero-actions"><button className="secondary" onClick={() => sync("initial")} disabled={!canSync || syncing}>首次归档</button><button className="primary" onClick={search}><MagnifyingGlass />搜索聊天记录</button></div></section>
       <div className="tabs"><button className={activeTab === "overview" ? "active" : ""} aria-selected={activeTab === "overview"} onClick={() => setActiveTab("overview")}>关系总览</button><button className={activeTab === "evidence" ? "active" : ""} aria-selected={activeTab === "evidence"} onClick={() => setActiveTab("evidence")}>聊天证据</button><button disabled>待办事项</button><button disabled>标签与备注</button></div>
-      <div className="content">
+      <div className="content">{showActions && <section className="card evidence-card"><header className="card-heading"><h2>手动待办事项</h2><button className="link" onClick={() => setActionDraft({ content: "", status: "open" })}>添加待办</button></header><p>仅由用户手动创建，不从聊天自动推断。</p>{actionDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveActionItem(); }}><label>内容<textarea value={actionDraft.content} onChange={(event) => setActionDraft({ ...actionDraft, content: event.target.value })} required /></label><footer><button type="button" className="link" onClick={() => setActionDraft(null)}>取消</button><button className="primary" type="submit">保存待办</button></footer></form>}{!actionItems.length ? <p className="empty-message">尚无手动待办。</p> : <div className="fact-list">{actionItems.map((item) => <article className="fact-row" key={item.id}><div><strong>{item.status === "done" ? "已完成" : "待处理"}</strong><time>{formatMessageTime(item.updated_at)}</time></div><p>{item.content}</p><footer><span><button className="link" onClick={() => void toggleActionItem(item)}>{item.status === "done" ? "恢复待处理" : "标记完成"}</button><button className="link danger" onClick={() => void removeActionItem(item.id)}>删除</button></span></footer></article>)}</div>}</section>}
         {activeTab === "overview" && <>
           <section className="card profile-card"><header className="card-heading"><h2><UsersThree weight="fill" />联系人档案</h2><span><button className="link" disabled={!selected} onClick={() => setProfileHistoryOpen((current) => !current)}>资料历史</button><button className="link" disabled={!selected} onClick={beginProfileEdit}>编辑资料</button></span></header>{selected ? <><p>用户维护资料只保存在本机，不会被同步覆盖，也不会由聊天自动推断。</p><dl className="profile-fields"><div><dt>备注</dt><dd>{selected.user_remark_name ?? selected.remark_name ?? "暂无"}<small>{selected.user_remark_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>确认实名</dt><dd>{selected.user_confirmed_real_name ?? selected.confirmed_real_name ?? "暂无"}<small>{selected.user_confirmed_real_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>公司</dt><dd>{selected.effective_company ?? selected.company ?? "暂无"}<small>{selected.user_company ? "用户维护" : "采集资料"}</small></dd></div><div><dt>角色</dt><dd>{selected.effective_role ?? selected.role ?? "暂无"}<small>{selected.user_role ? "用户维护" : "采集资料"}</small></dd></div></dl>{profileDraft && <form className="profile-editor" onSubmit={(event) => { event.preventDefault(); void saveProfile(profileDraft); }}><label>备注<input value={profileDraft.remark_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, remark_name: event.target.value })} maxLength={255} /></label><label>确认实名<input value={profileDraft.confirmed_real_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, confirmed_real_name: event.target.value })} maxLength={255} /></label><label>公司<input value={profileDraft.company ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, company: event.target.value })} maxLength={255} /></label><label>角色<input value={profileDraft.role ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} maxLength={255} /></label><footer><button type="button" className="link" onClick={() => setProfileDraft(null)}>取消</button><button className="primary" type="submit" disabled={profileSaving}>{profileSaving ? "保存中…" : "保存资料"}</button></footer></form>}{!profileDraft && <button className="link clear-profile" disabled={profileSaving || ![selected.user_remark_name, selected.user_confirmed_real_name, selected.user_company, selected.user_role].some(Boolean)} onClick={() => void saveProfile(emptyProfile())}>清除用户维护</button>}{profileHistoryOpen && <section className="profile-history"><h3>资料历史</h3>{profileHistoryLoading ? <p className="empty-message">正在读取资料历史…</p> : !profileHistory.length ? <p className="empty-message">当前联系人尚无资料操作历史。</p> : <div className="profile-history-list">{profileHistory.map((event) => <article key={event.id}><strong>{profileSnapshot(event)}</strong><time>{formatMessageTime(event.occurred_at)}</time><span>用户操作记录</span></article>)}</div>}</section>}</> : <p className="empty-message">选择联系人后可维护本地资料。</p>}</section>
           <section className="card confirmed"><header className="card-heading"><h2><CheckCircle weight="fill" />已确认的事实</h2><span><button className="link" disabled={!selected} onClick={() => setHistoryOpen((current) => !current)}>事实历史</button><button className="link" disabled={!selected} onClick={() => beginFact()}>添加事实</button></span></header><p>仅由用户手动记录或确认；系统不会从聊天自动推断事实。</p>{factDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveFact(); }}><label>类型<select value={factDraft.kind} onChange={(event) => setFactDraft({ ...factDraft, kind: event.target.value as FactKind })}>{Object.entries(factKindLabels).map(([kind, label]) => <option value={kind} key={kind}>{label}</option>)}</select></label><label>内容<textarea value={factDraft.content} onChange={(event) => setFactDraft({ ...factDraft, content: event.target.value })} placeholder="输入用户确认的内容" maxLength={2000} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={factDraft.message_ids.includes(message.id)} onChange={() => toggleFactEvidence(message.id)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>无原文证据时将标记为“用户手动记录”。</p>}</fieldset><footer><button type="button" className="link" onClick={() => { setFactDraft(null); setEditingFactId(null); }}>取消</button><button className="primary" type="submit" disabled={factSaving || !factDraft.content.trim()}>{factSaving ? "保存中…" : editingFactId ? "保存修改" : "保存事实"}</button></footer></form>}{factsLoading ? <p className="empty-message">正在读取已确认事实…</p> : !facts.length ? <p className="empty-message">尚无已确认事实。可手动记录，或从聊天证据添加原文关联。</p> : <div className="fact-list">{facts.map((fact) => <article className="fact-row" key={fact.id}><div><strong>{factKindLabels[fact.kind]}</strong><time>更新于 {formatMessageTime(fact.updated_at)}</time></div><p>{fact.content}</p><footer>{fact.evidence.length ? <button className="link" onClick={() => showContext(fact.evidence[0])}>原文证据 {fact.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => editFact(fact)}>编辑</button><button className="link danger" onClick={() => void removeFact(fact.id)}>删除</button></span></footer></article>)}</div>}{historyOpen && <section className="fact-history"><h3>事实历史</h3>{historyLoading ? <p className="empty-message">正在读取事实历史…</p> : !factHistory.length ? <p className="empty-message">当前联系人尚无事实操作历史。</p> : <div className="fact-list">{factHistory.map((event) => <article className="fact-row history-row" key={event.id}><div><strong>{factHistoryLabels[event.event_type]} · {factKindLabels[event.kind]}</strong><time>{formatMessageTime(event.occurred_at)}</time></div><p>{event.content}</p><footer>{event.evidence.length ? <button className="link" onClick={() => showContext(event.evidence[0])}>原文证据 {event.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span className="history-source">用户操作记录</span></footer></article>)}</div>}</section>}</section>

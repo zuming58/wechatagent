@@ -21,7 +21,7 @@
 ## 3. 当前基线（交接前）
 
 - 分支：`agent/ui-demo`
-- 基线提交：`f388f4c`
+- 基线提交：`92b287b`
 - UI Demo：`prototypes/ui-demo/`，亮蓝版已通过 `design-qa.md` 验收。
 - 后端：`backend/`，FastAPI + SQLite + SQLAlchemy + Alembic + FTS5(trigram)。
 - 正式前端：`frontend/`，React + TypeScript，已接通合成数据的状态、首次归档、自动增量同步状态、联系人档案、聊天证据、带结构化筛选的原文搜索、安全附件摘要、消息上下文、用户确认事实和事实变更历史。
@@ -62,14 +62,14 @@
 - <commit hash；若未提交，说明原因>
 ```
 
-## 6. 当前发给 Hermes 的任务：DEV-013
+## 6. 当前发给 Hermes 的任务：DEV-014
 
 > 以下区块是给用户复制给 Hermes 的原文。
 
 ```text
-你在 F:\WorkBuddy\wechatagent 项目中实现 DEV-013。请先阅读 docs\HERMES_HANDOFF.md，并严格遵守其中的安全与视觉边界。
+你在 F:\WorkBuddy\wechatagent 项目中实现 DEV-014。请先阅读 docs\HERMES_HANDOFF.md，并严格遵守其中的安全与视觉边界。
 
-任务目标：补齐账号隔离的本地存储状态与完整性检查，仅使用合成数据、临时数据库和 mock API。
+任务目标：补齐用户手动待办事项，仅使用合成数据、临时数据库和 mock API；不得从聊天自动创建待办。
 
 实施范围：
 1. 原文搜索支持联系人、消息类型、日期和仅含附件筛选，联系人范围必须复用私聊与已映射群聊发言的账号隔离规则。

@@ -226,6 +226,19 @@ class KnowledgeCardHistoryEvidence(Base):
     message: Mapped[Message] = relationship()
 
 
+class ActionItem(Base):
+    __tablename__ = "action_items"
+    __table_args__ = (Index("ix_action_item_account_updated", "account_id", "updated_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)

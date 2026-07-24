@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
-from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .models import ActionItem, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
+from .schemas import AccountSummary, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -156,6 +156,10 @@ def knowledge_card_response(card: KnowledgeCard) -> KnowledgeCardResponse:
 
 def knowledge_card_history_response(event: KnowledgeCardHistoryEvent) -> KnowledgeCardHistoryResponse:
     return KnowledgeCardHistoryResponse(id=event.id, account_id=event.account_id, card_id=event.card_id, event_type=event.event_type, card_type=event.card_type, title=event.title, content=event.content, occurred_at=event.occurred_at, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence])
+
+
+def action_item_response(item: ActionItem) -> ActionItemResponse:
+    return ActionItemResponse(id=item.id, account_id=item.account_id, content=item.content, status=item.status, due_at=item.due_at, created_at=item.created_at, updated_at=item.updated_at)
 
 
 def knowledge_card_messages_or_422(db: Session, account_id: str, message_ids: list[str]) -> list[Message]:
@@ -546,6 +550,45 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             raise HTTPException(status_code=404, detail="knowledge_card_not_found")
         record_knowledge_card_history(db, card, "deleted", [link.message for link in card.evidence])
         db.delete(card)
+        db.commit()
+
+    @app.get("/api/v1/action-items", response_model=list[ActionItemResponse])
+    def list_action_items(account_id: str, status: str | None = Query(default=None, pattern="^(open|done)$"), db: Session = Depends(get_db)) -> list[ActionItemResponse]:
+        statement = select(ActionItem).where(ActionItem.account_id == account_id)
+        if status:
+            statement = statement.where(ActionItem.status == status)
+        return [action_item_response(item) for item in db.scalars(statement.order_by(ActionItem.due_at.is_(None), ActionItem.due_at, ActionItem.updated_at.desc()))]
+
+    @app.post("/api/v1/action-items", response_model=ActionItemResponse, status_code=201)
+    def create_action_item(request: ActionItemWriteRequest, account_id: str, db: Session = Depends(get_db)) -> ActionItemResponse:
+        content = request.content.strip()
+        if not content:
+            raise HTTPException(status_code=422, detail="action_item_content_required")
+        item = ActionItem(id=str(uuid.uuid4()), account_id=account_id, content=content, status=request.status, due_at=request.due_at)
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return action_item_response(item)
+
+    @app.patch("/api/v1/action-items/{item_id}", response_model=ActionItemResponse)
+    def update_action_item(item_id: str, request: ActionItemWriteRequest, account_id: str, db: Session = Depends(get_db)) -> ActionItemResponse:
+        item = db.scalar(select(ActionItem).where(ActionItem.id == item_id, ActionItem.account_id == account_id))
+        if not item:
+            raise HTTPException(status_code=404, detail="action_item_not_found")
+        content = request.content.strip()
+        if not content:
+            raise HTTPException(status_code=422, detail="action_item_content_required")
+        item.content, item.status, item.due_at = content, request.status, request.due_at
+        db.commit()
+        db.refresh(item)
+        return action_item_response(item)
+
+    @app.delete("/api/v1/action-items/{item_id}", status_code=204)
+    def delete_action_item(item_id: str, account_id: str, db: Session = Depends(get_db)) -> None:
+        item = db.scalar(select(ActionItem).where(ActionItem.id == item_id, ActionItem.account_id == account_id))
+        if not item:
+            raise HTTPException(status_code=404, detail="action_item_not_found")
+        db.delete(item)
         db.commit()
 
     @app.get("/api/v1/knowledge-cards/{card_id}/history", response_model=list[KnowledgeCardHistoryResponse])

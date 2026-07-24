@@ -56,6 +56,22 @@ class StorageStatusResponse(BaseModel):
     integrity_check: str
 
 
+class ActionItemWriteRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    status: str = Field(default="open", pattern="^(open|done)$")
+    due_at: datetime | None = None
+
+
+class ActionItemResponse(BaseModel):
+    id: str
+    account_id: str
+    content: str
+    status: str
+    due_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class ContactResponse(BaseModel):
     id: str
     source_id: str

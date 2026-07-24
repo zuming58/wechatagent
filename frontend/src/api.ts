@@ -76,6 +76,8 @@ export type KnowledgeCardWrite = { card_type: KnowledgeCardType; title: string; 
 export type KnowledgeCard = { id: string; account_id: string; card_type: KnowledgeCardType; title: string; content: string; created_at: string; updated_at: string; evidence: Message[] };
 export type KnowledgeCardHistoryEvent = { id: string; account_id: string; card_id: string; event_type: "created" | "updated" | "deleted"; card_type: KnowledgeCardType; title: string; content: string; occurred_at: string; evidence: Message[] };
 export type StorageStatus = { account_id: string; contacts: number; conversations: number; messages: number; facts: number; knowledge_cards: number; integrity_check: string };
+export type ActionItem = { id: string; account_id: string; content: string; status: "open" | "done"; due_at?: string | null; created_at: string; updated_at: string };
+export type ActionItemWrite = { content: string; status: "open" | "done"; due_at?: string | null };
 
 export class LocalApiError extends Error {
   constructor(public readonly status: number, public readonly errorCode?: string, public readonly reason?: string) {
@@ -112,6 +114,10 @@ export const api = {
   deleteKnowledgeCard: (cardId: string, accountId: string) => request<void>(`/knowledge-cards/${encodeURIComponent(cardId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
   knowledgeCardHistory: (cardId: string, accountId: string) => request<KnowledgeCardHistoryEvent[]>(`/knowledge-cards/${encodeURIComponent(cardId)}/history?account_id=${encodeURIComponent(accountId)}`),
   storageStatus: (accountId: string) => request<StorageStatus>(`/storage/status?account_id=${encodeURIComponent(accountId)}`),
+  actionItems: (accountId: string, status?: "open" | "done") => request<ActionItem[]>(`/action-items?account_id=${encodeURIComponent(accountId)}${status ? `&status=${status}` : ""}`),
+  createActionItem: (accountId: string, payload: ActionItemWrite) => request<ActionItem>(`/action-items?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
+  updateActionItem: (itemId: string, accountId: string, payload: ActionItemWrite) => request<ActionItem>(`/action-items/${encodeURIComponent(itemId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteActionItem: (itemId: string, accountId: string) => request<void>(`/action-items/${encodeURIComponent(itemId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
   search: (accountId: string, query: string, filters?: MessageSearchFilters) => {
     const params = new URLSearchParams({ account_id: accountId, q: query });
     for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));

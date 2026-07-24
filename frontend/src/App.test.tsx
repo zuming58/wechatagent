@@ -27,6 +27,10 @@ vi.mock("./api", async () => {
       deleteKnowledgeCard: vi.fn(),
       knowledgeCardHistory: vi.fn(),
       storageStatus: vi.fn(),
+      actionItems: vi.fn(),
+      createActionItem: vi.fn(),
+      updateActionItem: vi.fn(),
+      deleteActionItem: vi.fn(),
     },
   };
 });
@@ -72,6 +76,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.syncSchedule.mockResolvedValue({ enabled: true, interval_seconds: 300 });
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
+  mockedApi.actionItems.mockResolvedValue([]);
   return render(<App />);
 }
 
