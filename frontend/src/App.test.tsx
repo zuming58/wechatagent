@@ -462,6 +462,8 @@ describe("multi-account sync safety gate", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "全局搜索" }));
     expect(await screen.findByRole("heading", { name: "全局搜索" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveStyle({ gridTemplateRows: "34px auto 1fr" });
+    expect(screen.getByPlaceholderText("输入关键词后按 Enter")).toBeVisible();
     expect(screen.getByText("当前账号全部已归档消息")).toBeInTheDocument();
     expect(screen.getByLabelText("当前联系人")).not.toBeChecked();
 
