@@ -1,7 +1,7 @@
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun, Tag, TagLink
-from .schemas import AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
+from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun, Tag, TagLink
+from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -386,6 +386,51 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             knowledge_cards=db.scalar(select(func.count(KnowledgeCard.id)).where(KnowledgeCard.account_id == account_id)) or 0,
             integrity_check=str(integrity),
         )
+
+    @app.get("/api/v1/storage/backup-manifest", response_model=BackupManifestResponse)
+    def backup_manifest(account_id: str, db: Session = Depends(get_db)) -> BackupManifestResponse:
+        integrity = db.execute(text("PRAGMA integrity_check")).scalar() or "unknown"
+        return BackupManifestResponse(
+            account_id=account_id,
+            generated_at=datetime.now(timezone.utc),
+            integrity_check=str(integrity),
+            counts={
+                "contacts": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == account_id)) or 0,
+                "conversations": db.scalar(select(func.count(Conversation.id)).where(Conversation.account_id == account_id)) or 0,
+                "messages": db.scalar(select(func.count(Message.id)).where(Message.account_id == account_id)) or 0,
+                "facts": db.scalar(select(func.count(Fact.id)).where(Fact.account_id == account_id)) or 0,
+                "knowledge_cards": db.scalar(select(func.count(KnowledgeCard.id)).where(KnowledgeCard.account_id == account_id)) or 0,
+                "action_items": db.scalar(select(func.count(ActionItem.id)).where(ActionItem.account_id == account_id)) or 0,
+                "tags": db.scalar(select(func.count(Tag.id)).where(Tag.account_id == account_id)) or 0,
+            },
+        )
+
+    @app.post("/api/v1/accounts/{account_id}/deletion-requests", response_model=AccountDeletionRequestResponse, status_code=201)
+    def create_account_deletion_request(account_id: str, db: Session = Depends(get_db)) -> AccountDeletionRequestResponse:
+        if not db.get(Account, account_id):
+            raise HTTPException(status_code=404, detail="account_not_found")
+        now = datetime.now(timezone.utc)
+        request = AccountDeletionRequest(id=str(uuid.uuid4()), account_id=account_id, confirmation_phrase=f"DELETE {account_id}", expires_at=now + timedelta(minutes=10))
+        db.add(request)
+        db.commit()
+        return AccountDeletionRequestResponse(id=request.id, account_id=account_id, confirmation_phrase=request.confirmation_phrase, expires_at=request.expires_at)
+
+    @app.delete("/api/v1/accounts/{account_id}/data", status_code=204)
+    def delete_account_data(account_id: str, request_id: str, confirmation: str, db: Session = Depends(get_db)) -> None:
+        request = db.scalar(select(AccountDeletionRequest).where(AccountDeletionRequest.id == request_id, AccountDeletionRequest.account_id == account_id))
+        if not request:
+            raise HTTPException(status_code=404, detail="deletion_request_not_found")
+        expires_at = request.expires_at if request.expires_at.tzinfo else request.expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=409, detail="deletion_request_expired")
+        if confirmation != request.confirmation_phrase:
+            raise HTTPException(status_code=422, detail="deletion_confirmation_mismatch")
+        account = db.get(Account, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="account_not_found")
+        db.query(SyncRun).filter(SyncRun.account_id == account_id).delete()
+        db.delete(account)
+        db.commit()
 
     @app.get("/api/v1/contacts", response_model=list[ContactResponse])
     def list_contacts(account_id: str, query: str | None = None, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)) -> list[ContactResponse]:

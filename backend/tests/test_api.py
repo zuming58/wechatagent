@@ -10,7 +10,7 @@ from app.config import Settings
 from app.connectors.base import Connector, ConnectorBatch, SourceAccount, SourceProbe, StandardContact, StandardConversation, StandardMessage
 from app.connectors.synthetic import SyntheticConnector
 from app.main import create_app
-from app.models import Contact, Message, SyncShard, TagLink
+from app.models import AccountDeletionRequest, ActionItem, Contact, Fact, KnowledgeCard, Message, SyncShard, Tag, TagLink
 
 
 class RecordingSyntheticConnector(SyntheticConnector):
@@ -591,6 +591,47 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
     assert other.json()["messages"] == 0
 
 
+def test_backup_manifest_and_two_step_account_deletion_are_local_and_explicit(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contact = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()[0]
+    message = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()[0]
+    client.post(f"/api/v1/contacts/{contact['id']}/facts", params={"account_id": "dev-account"}, json={"kind": "need", "content": "Local fact", "message_ids": [message["id"]]})
+    client.post("/api/v1/knowledge-cards", params={"account_id": "dev-account"}, json={"card_type": "note", "title": "Local card", "content": "User-written", "message_ids": []})
+    client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Local action", "status": "open", "message_ids": []})
+    client.post("/api/v1/tags", params={"account_id": "dev-account"}, json={"name": "Local tag", "color": "#1677ff"})
+    manifest = client.get("/api/v1/storage/backup-manifest", params={"account_id": "dev-account"})
+    assert manifest.status_code == 200
+    assert manifest.json()["integrity_check"] == "ok"
+    assert manifest.json()["counts"]["messages"] == 5
+    assert {key: manifest.json()["counts"][key] for key in ("facts", "knowledge_cards", "action_items", "tags")} == {"facts": 1, "knowledge_cards": 1, "action_items": 1, "tags": 1}
+    assert "text_content" not in str(manifest.json())
+
+    request = client.post("/api/v1/accounts/dev-account/deletion-requests")
+    assert request.status_code == 201
+    deletion = request.json()
+    assert deletion["confirmation_phrase"] == "DELETE dev-account"
+    mismatch = client.delete("/api/v1/accounts/dev-account/data", params={"request_id": deletion["id"], "confirmation": "DELETE anything-else"})
+    assert mismatch.status_code == 422
+    assert mismatch.json()["detail"] == "deletion_confirmation_mismatch"
+    wrong_account = client.delete("/api/v1/accounts/another-account/data", params={"request_id": deletion["id"], "confirmation": deletion["confirmation_phrase"]})
+    assert wrong_account.status_code == 404
+    with database_session(client) as session:
+        session.get(AccountDeletionRequest, deletion["id"]).expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.commit()
+    expired = client.delete("/api/v1/accounts/dev-account/data", params={"request_id": deletion["id"], "confirmation": deletion["confirmation_phrase"]})
+    assert expired.status_code == 409
+    assert expired.json()["detail"] == "deletion_request_expired"
+
+    fresh = client.post("/api/v1/accounts/dev-account/deletion-requests").json()
+    deleted = client.delete("/api/v1/accounts/dev-account/data", params={"request_id": fresh["id"], "confirmation": fresh["confirmation_phrase"]})
+    assert deleted.status_code == 204
+    assert client.get("/api/v1/storage/status", params={"account_id": "dev-account"}).json()["messages"] == 0
+    assert client.get("/api/v1/sync/runs", params={"account_id": "dev-account"}).json() == []
+    with database_session(client) as session:
+        for model in (Fact, KnowledgeCard, ActionItem, Tag):
+            assert session.scalar(select(func.count(model.id)).where(model.account_id == "dev-account")) == 0
+
+
 def test_user_action_items_are_account_isolated_and_manually_completed(client):
     client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     message = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()[0]
@@ -691,6 +732,6 @@ def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):
     command.upgrade(config, "head")
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert {"accounts", "facts", "knowledge_cards", "action_items"}.issubset(set(inspect(engine).get_table_names()))
+        assert {"accounts", "facts", "knowledge_cards", "action_items", "tags", "account_deletion_requests"}.issubset(set(inspect(engine).get_table_names()))
     finally:
         engine.dispose()

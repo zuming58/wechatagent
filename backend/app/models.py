@@ -307,6 +307,17 @@ class TagLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class AccountDeletionRequest(Base):
+    __tablename__ = "account_deletion_requests"
+    __table_args__ = (Index("ix_account_deletion_request_account_expires", "account_id", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    confirmation_phrase: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)

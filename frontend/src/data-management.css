@@ -1,0 +1,29 @@
+.data-management {
+  grid-column: 1 / 2;
+  display: grid;
+  gap: 8px;
+  background: #fff8e8;
+  border-color: #f8e8ba;
+}
+
+.data-management > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.data-management > header strong { color: #66522d; font-size: 10px; }
+.data-management > header span, .data-management > p, .backup-manifest { color: #7f6d4f; font-size: 10px; line-height: 1.5; }
+.data-management > p, .backup-manifest { margin: 0; }
+.data-management-actions { display: flex; align-items: center; gap: 10px; }
+.data-management-actions .secondary { height: 28px; border-radius: 6px; padding: 0 9px; font-size: 10px; cursor: pointer; }
+.data-management-actions .link { padding: 0; font-size: 10px; }
+
+.deletion-confirmation { display: grid; gap: 7px; border-top: 1px solid #f4dca2; padding-top: 10px; }
+.deletion-confirmation p { margin: 0; color: #8a5a2b; font-size: 10px; line-height: 1.5; }
+.deletion-confirmation code { width: max-content; max-width: 100%; overflow: auto; border: 1px solid #f0d890; border-radius: 5px; background: #fffdf7; padding: 5px 7px; color: #66522d; font-size: 10px; }
+.deletion-confirmation label { display: grid; gap: 5px; color: #7f6d4f; font-size: 10px; }
+.deletion-confirmation input { height: 29px; border: 1px solid #f0d890; border-radius: 6px; background: #fff; color: #344054; padding: 0 7px; font: inherit; }
+.danger-action { justify-self: start; height: 28px; border: 1px solid #c53b48; border-radius: 6px; background: #c53b48; color: #fff; padding: 0 10px; font-size: 10px; cursor: pointer; }
+.danger-action:disabled { opacity: .5; cursor: not-allowed; }

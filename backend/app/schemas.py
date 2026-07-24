@@ -56,6 +56,20 @@ class StorageStatusResponse(BaseModel):
     integrity_check: str
 
 
+class BackupManifestResponse(BaseModel):
+    account_id: str
+    generated_at: datetime
+    integrity_check: str
+    counts: dict[str, int]
+
+
+class AccountDeletionRequestResponse(BaseModel):
+    id: str
+    account_id: str
+    confirmation_phrase: str
+    expires_at: datetime
+
+
 class ActionItemWriteRequest(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
     status: str = Field(default="open", pattern="^(open|done)$")

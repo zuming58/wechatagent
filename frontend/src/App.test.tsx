@@ -27,6 +27,9 @@ vi.mock("./api", async () => {
       deleteKnowledgeCard: vi.fn(),
       knowledgeCardHistory: vi.fn(),
       storageStatus: vi.fn(),
+      backupManifest: vi.fn(),
+      createAccountDeletionRequest: vi.fn(),
+      deleteAccountData: vi.fn(),
       actionItems: vi.fn(),
       createActionItem: vi.fn(),
       updateActionItem: vi.fn(),
@@ -90,6 +93,9 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.syncSchedule.mockResolvedValue({ enabled: true, interval_seconds: 300 });
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
+  mockedApi.backupManifest.mockResolvedValue({ account_id: "account-b", generated_at: "2026-07-24T12:00:00Z", integrity_check: "ok", counts: { contacts: 2, conversations: 1, messages: 4, facts: 1, knowledge_cards: 1, action_items: 1, tags: 1 } });
+  mockedApi.createAccountDeletionRequest.mockResolvedValue({ id: "deletion-request", account_id: "account-b", confirmation_phrase: "DELETE account-b", expires_at: "2026-07-24T12:10:00Z" });
+  mockedApi.deleteAccountData.mockResolvedValue(undefined);
   mockedApi.actionItems.mockResolvedValue([]);
   mockedApi.createActionItem.mockImplementation(async (accountId, payload) => ({ id: "new-action", account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
   mockedApi.updateActionItem.mockImplementation(async (itemId, accountId, payload) => ({ id: itemId, account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
@@ -479,5 +485,26 @@ describe("multi-account sync safety gate", () => {
 
     expect(await screen.findByRole("button", { name: /时间线/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /标签管理/ })).toBeEnabled();
+  });
+
+  it("shows a content-free backup manifest and requires an exact second confirmation before deleting account data", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }));
+
+    const manifestButton = await screen.findByRole("button", { name: "生成备份前清单" });
+    expect(mockedApi.deleteAccountData).not.toHaveBeenCalled();
+    fireEvent.click(manifestButton);
+    await waitFor(() => expect(mockedApi.backupManifest).toHaveBeenCalledWith("account-b"));
+    expect(await screen.findByText(/消息 4，联系人 2，事实 1/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "准备删除当前账号数据" }));
+    await waitFor(() => expect(mockedApi.createAccountDeletionRequest).toHaveBeenCalledWith("account-b"));
+    const deleteButton = await screen.findByRole("button", { name: "删除当前账号数据" });
+    expect(deleteButton).toBeDisabled();
+    expect(mockedApi.deleteAccountData).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("确认短语"), { target: { value: "DELETE account-b" } });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+    await waitFor(() => expect(mockedApi.deleteAccountData).toHaveBeenCalledWith("account-b", "deletion-request", "DELETE account-b"));
   });
 });

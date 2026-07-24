@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
+import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
+import "./data-management.css";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 const factKindLabels: Record<FactKind, string> = {
@@ -84,6 +85,9 @@ export function App() {
   const [knowledgeHistory, setKnowledgeHistory] = useState<KnowledgeCardHistoryEvent[]>([]);
   const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [backupManifest, setBackupManifest] = useState<BackupManifest | null>(null);
+  const [deletionRequest, setDeletionRequest] = useState<AccountDeletionRequest | null>(null);
+  const [deletionConfirmation, setDeletionConfirmation] = useState("");
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [actionDraft, setActionDraft] = useState<ActionItemWrite | null>(null);
   const [actionHistory, setActionHistory] = useState<ActionItemHistoryEvent[]>([]);
@@ -167,7 +171,7 @@ export function App() {
   }, [accountId]);
 
   useEffect(() => {
-    if (!accountId) { setStorage(null); return; }
+    if (!accountId) { setStorage(null); setBackupManifest(null); setDeletionRequest(null); setDeletionConfirmation(""); return; }
     Promise.resolve(api.storageStatus(accountId)).then((value) => value && setStorage(value)).catch(() => setNotice("存储状态读取失败。"));
   }, [accountId]);
 
@@ -430,6 +434,40 @@ export function App() {
     } catch { setNotice("标签关联未移除。 "); }
   }
 
+  async function loadBackupManifest() {
+    if (!accountId) return;
+    try {
+      setBackupManifest(await api.backupManifest(accountId));
+    } catch { setNotice("备份前清单读取失败。 "); }
+  }
+
+  async function requestAccountDeletion() {
+    if (!accountId) return;
+    try {
+      setDeletionRequest(await api.createAccountDeletionRequest(accountId));
+      setDeletionConfirmation("");
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `删除请求未创建（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查当前账号。"}` : "删除请求未创建。 ");
+    }
+  }
+
+  async function confirmAccountDeletion() {
+    if (!accountId || !deletionRequest || deletionConfirmation !== deletionRequest.confirmation_phrase) return;
+    try {
+      await api.deleteAccountData(accountId, deletionRequest.id, deletionConfirmation);
+      setAccountId("");
+      setContacts([]);
+      setSelected(null);
+      setStorage(null);
+      setBackupManifest(null);
+      setDeletionRequest(null);
+      setDeletionConfirmation("");
+      setNotice("当前账号的本地归档数据已删除。数据源检测不会被修改。");
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `本地数据未删除（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请重新创建删除请求。"}` : "本地数据未删除。 ");
+    }
+  }
+
   function editFact(fact: Fact) {
     setEditingFactId(fact.id);
     setFactDraft({ kind: fact.kind, content: fact.content, message_ids: fact.evidence.map((item) => item.id) });
@@ -535,6 +573,23 @@ export function App() {
     </article>);
   };
 
+  const dataManagementPanel = <section className="card data-management">
+    <header><strong>本地数据管理</strong><span>仅影响当前明确选择的账号</span></header>
+    {!accountId ? <p>请选择本地账号后查看清单或准备删除。</p> : <>
+      <div className="data-management-actions">
+        <button type="button" className="secondary" onClick={() => void loadBackupManifest()}>生成备份前清单</button>
+        <button type="button" className="link danger" onClick={() => void requestAccountDeletion()}>准备删除当前账号数据</button>
+      </div>
+      {backupManifest && <p className="backup-manifest">清单生成于 {formatMessageTime(backupManifest.generated_at)}：完整性 {backupManifest.integrity_check === "ok" ? "正常" : backupManifest.integrity_check}；消息 {backupManifest.counts.messages ?? 0}，联系人 {backupManifest.counts.contacts ?? 0}，事实 {backupManifest.counts.facts ?? 0}，知识卡 {backupManifest.counts.knowledge_cards ?? 0}，待办 {backupManifest.counts.action_items ?? 0}，标签 {backupManifest.counts.tags ?? 0}。</p>}
+      {deletionRequest && <div className="deletion-confirmation">
+        <p>删除请求将在 {formatMessageTime(deletionRequest.expires_at)} 失效。此操作只删除当前账号的本地归档和用户本地记录，不能恢复。</p>
+        <code>{deletionRequest.confirmation_phrase}</code>
+        <label>确认短语<input value={deletionConfirmation} onChange={(event) => setDeletionConfirmation(event.target.value)} placeholder="输入上方确认短语" /></label>
+        <button type="button" className="danger-action" disabled={deletionConfirmation !== deletionRequest.confirmation_phrase} onClick={() => void confirmAccountDeletion()}>删除当前账号数据</button>
+      </div>}
+    </>}
+  </section>;
+
   const globalSearchPanel = <section className="card global-search-card">
     <header className="card-heading"><h2><MagnifyingGlass weight="bold" />全局搜索</h2><span className="search-scope">当前账号全部已归档消息</span></header>
     <p>只搜索本机已归档的原文。默认跨联系人；勾选后才限制为当前联系人。</p>
@@ -589,6 +644,7 @@ export function App() {
         {workspace === "relationships" && activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。", true)}</div></section>}
         {context && <section className="card context-card"><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}
         <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}{schedule && <div className="schedule-state"><strong>{schedule.enabled ? `自动增量同步已启用（每 ${Math.round(schedule.interval_seconds / 60)} 分钟）` : "自动增量同步未启用"}</strong><span>{schedule.enabled ? "仅对已首次归档的合成账号生效。" : schedule.reason}</span></div>}{storage && <div className="recent-sync"><strong>本地存储 · {storage.integrity_check === "ok" ? "完整性正常" : storage.integrity_check}</strong><span>消息 {storage.messages} · 联系人 {storage.contacts} · 事实 {storage.facts} · 知识卡 {storage.knowledge_cards}</span></div>}{syncRuns.length > 0 && <div className="recent-sync"><strong>最近同步</strong>{syncRuns.slice(0, 3).map((run) => <span key={run.id}>{syncRunSummary(run)}</span>)}</div>}<p>{contextLoading ? "正在读取消息上下文…" : notice || "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
+        {dataManagementPanel}
       </div>
     </main>
   </div>;

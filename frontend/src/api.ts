@@ -83,6 +83,8 @@ export type KnowledgeCardWrite = { card_type: KnowledgeCardType; title: string; 
 export type KnowledgeCard = { id: string; account_id: string; card_type: KnowledgeCardType; title: string; content: string; created_at: string; updated_at: string; evidence: Message[] };
 export type KnowledgeCardHistoryEvent = { id: string; account_id: string; card_id: string; event_type: "created" | "updated" | "deleted"; card_type: KnowledgeCardType; title: string; content: string; occurred_at: string; evidence: Message[] };
 export type StorageStatus = { account_id: string; contacts: number; conversations: number; messages: number; facts: number; knowledge_cards: number; integrity_check: string };
+export type BackupManifest = { account_id: string; generated_at: string; integrity_check: string; counts: Record<string, number> };
+export type AccountDeletionRequest = { id: string; account_id: string; confirmation_phrase: string; expires_at: string };
 export type ActionItem = { id: string; account_id: string; content: string; status: "open" | "done"; due_at?: string | null; created_at: string; updated_at: string; evidence: Message[] };
 export type ActionItemWrite = { content: string; status: "open" | "done"; due_at?: string | null; message_ids: string[] };
 export type ActionItemHistoryEvent = { id: string; account_id: string; action_item_id: string; event_type: "created" | "updated" | "deleted"; content: string; status: "open" | "done"; due_at?: string | null; occurred_at: string; evidence: Message[] };
@@ -122,6 +124,9 @@ export const api = {
   deleteKnowledgeCard: (cardId: string, accountId: string) => request<void>(`/knowledge-cards/${encodeURIComponent(cardId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
   knowledgeCardHistory: (cardId: string, accountId: string) => request<KnowledgeCardHistoryEvent[]>(`/knowledge-cards/${encodeURIComponent(cardId)}/history?account_id=${encodeURIComponent(accountId)}`),
   storageStatus: (accountId: string) => request<StorageStatus>(`/storage/status?account_id=${encodeURIComponent(accountId)}`),
+  backupManifest: (accountId: string) => request<BackupManifest>(`/storage/backup-manifest?account_id=${encodeURIComponent(accountId)}`),
+  createAccountDeletionRequest: (accountId: string) => request<AccountDeletionRequest>(`/accounts/${encodeURIComponent(accountId)}/deletion-requests`, { method: "POST" }),
+  deleteAccountData: (accountId: string, requestId: string, confirmation: string) => request<void>(`/accounts/${encodeURIComponent(accountId)}/data?request_id=${encodeURIComponent(requestId)}&confirmation=${encodeURIComponent(confirmation)}`, { method: "DELETE" }),
   actionItems: (accountId: string, status?: "open" | "done") => request<ActionItem[]>(`/action-items?account_id=${encodeURIComponent(accountId)}${status ? `&status=${status}` : ""}`),
   createActionItem: (accountId: string, payload: ActionItemWrite) => request<ActionItem>(`/action-items?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
   updateActionItem: (itemId: string, accountId: string, payload: ActionItemWrite) => request<ActionItem>(`/action-items/${encodeURIComponent(itemId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
