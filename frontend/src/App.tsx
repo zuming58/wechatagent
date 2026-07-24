@@ -570,6 +570,7 @@ export function App() {
 
   async function removeFact(factId: string) {
     if (!accountId) return;
+    if (!window.confirm("确定删除这条已确认事实吗？删除后当前列表不再显示，但本地事实历史会保留此操作记录。")) return;
     try {
       await api.deleteFact(factId, accountId);
       setFacts((current) => current.filter((item) => item.id !== factId));

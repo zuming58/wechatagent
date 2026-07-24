@@ -357,12 +357,26 @@ describe("multi-account sync safety gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
     await waitFor(() => expect(mockedApi.updateFact).toHaveBeenCalledWith("fact-1", "account-b", { kind: "need", content: "Updated fact", message_ids: [] }));
 
+    const confirmDeletion = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(confirmDeletion).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(mockedApi.deleteFact).toHaveBeenCalledWith("fact-1", "account-b"));
 
     fireEvent.click(screen.getByRole("button", { name: "添加事实" }));
     fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
     expect(screen.queryByLabelText("内容")).not.toBeInTheDocument();
+  });
+
+  it("keeps a fact when its deletion confirmation is cancelled", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const fact: Fact = { id: "fact-1", account_id: "account-b", contact_id: contact.id, kind: "need", content: "Keep this fact", created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: [] };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], facts: [fact] });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+
+    expect(mockedApi.deleteFact).not.toHaveBeenCalled();
+    expect(screen.getByText("Keep this fact")).toBeInTheDocument();
   });
 
   it("shows local fact history, opens evidence context, and clears it for another contact", async () => {
