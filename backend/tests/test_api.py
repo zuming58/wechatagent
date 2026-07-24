@@ -561,3 +561,20 @@ def test_structured_search_filters_and_attachment_summaries_stay_local_and_sanit
     assert "synthetic" not in str(attachments_only.json())
 
     assert client.get("/api/v1/messages/search", params={"account_id": account.id, "q": "报价方案", "contact_id": "not-a-contact"}).status_code == 404
+
+
+def test_user_managed_knowledge_cards_keep_account_isolated_evidence_history(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    messages = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()
+    created = client.post("/api/v1/knowledge-cards", params={"account_id": "dev-account"}, json={"card_type": "project", "title": "Local deployment", "content": "User-written note", "message_ids": [messages[0]["id"]]})
+    assert created.status_code == 201
+    card = created.json()
+    assert [item["id"] for item in card["evidence"]] == [messages[0]["id"]]
+    updated = client.patch(f"/api/v1/knowledge-cards/{card['id']}", params={"account_id": "dev-account"}, json={"card_type": "decision", "title": "Updated local card", "content": "Still user-written", "message_ids": []})
+    assert updated.status_code == 200
+    assert client.patch(f"/api/v1/knowledge-cards/{card['id']}", params={"account_id": "other-account"}, json={"card_type": "note", "title": "No", "content": "No", "message_ids": []}).status_code == 404
+    deleted = client.delete(f"/api/v1/knowledge-cards/{card['id']}", params={"account_id": "dev-account"})
+    assert deleted.status_code == 204
+    assert client.get("/api/v1/knowledge-cards", params={"account_id": "dev-account"}).json() == []
+    history = client.get(f"/api/v1/knowledge-cards/{card['id']}/history", params={"account_id": "dev-account"})
+    assert [item["event_type"] for item in history.json()] == ["deleted", "updated", "created"]

@@ -136,3 +136,33 @@ class ContactProfileHistoryResponse(BaseModel):
     user_company: str | None
     user_role: str | None
     occurred_at: datetime
+
+
+class KnowledgeCardWriteRequest(BaseModel):
+    card_type: str = Field(pattern="^(contact|project|decision|note)$")
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1, max_length=5000)
+    message_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class KnowledgeCardResponse(BaseModel):
+    id: str
+    account_id: str
+    card_type: str
+    title: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+    evidence: list[MessageSearchItem]
+
+
+class KnowledgeCardHistoryResponse(BaseModel):
+    id: str
+    account_id: str
+    card_id: str
+    event_type: str
+    card_type: str
+    title: str
+    content: str
+    occurred_at: datetime
+    evidence: list[MessageSearchItem]

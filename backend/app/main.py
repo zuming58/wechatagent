@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
-from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
+from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -148,6 +148,30 @@ def record_contact_profile_history(db: Session, contact: Contact) -> None:
         user_company=contact.user_company,
         user_role=contact.user_role,
     ))
+
+
+def knowledge_card_response(card: KnowledgeCard) -> KnowledgeCardResponse:
+    return KnowledgeCardResponse(id=card.id, account_id=card.account_id, card_type=card.card_type, title=card.title, content=card.content, created_at=card.created_at, updated_at=card.updated_at, evidence=[message_item(link.message, link.message.conversation) for link in card.evidence])
+
+
+def knowledge_card_history_response(event: KnowledgeCardHistoryEvent) -> KnowledgeCardHistoryResponse:
+    return KnowledgeCardHistoryResponse(id=event.id, account_id=event.account_id, card_id=event.card_id, event_type=event.event_type, card_type=event.card_type, title=event.title, content=event.content, occurred_at=event.occurred_at, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence])
+
+
+def knowledge_card_messages_or_422(db: Session, account_id: str, message_ids: list[str]) -> list[Message]:
+    unique_ids = list(dict.fromkeys(message_ids))
+    messages = list(db.scalars(select(Message).where(Message.id.in_(unique_ids), Message.account_id == account_id)))
+    if len(messages) != len(unique_ids):
+        raise HTTPException(status_code=422, detail="knowledge_card_evidence_message_not_found")
+    return messages
+
+
+def record_knowledge_card_history(db: Session, card: KnowledgeCard, event_type: str, evidence: list[Message]) -> None:
+    event = KnowledgeCardHistoryEvent(id=str(uuid.uuid4()), account_id=card.account_id, card_id=card.id, event_type=event_type, card_type=card.card_type, title=card.title, content=card.content)
+    db.add(event)
+    db.flush()
+    for message in evidence:
+        db.add(KnowledgeCardHistoryEvidence(id=str(uuid.uuid4()), event_id=event.id, message_id=message.id))
 
 
 def normalized_profile_value(value: str | None) -> str | None:
@@ -462,6 +486,63 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         record_fact_history(db, fact, "deleted", [link.message for link in fact.evidence])
         db.delete(fact)
         db.commit()
+
+    @app.get("/api/v1/knowledge-cards", response_model=list[KnowledgeCardResponse])
+    def list_knowledge_cards(account_id: str, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)) -> list[KnowledgeCardResponse]:
+        cards = db.scalars(select(KnowledgeCard).where(KnowledgeCard.account_id == account_id).options(selectinload(KnowledgeCard.evidence).selectinload(KnowledgeCardEvidence.message).selectinload(Message.conversation)).order_by(KnowledgeCard.updated_at.desc(), KnowledgeCard.id.desc()).limit(limit)).all()
+        return [knowledge_card_response(card) for card in cards]
+
+    @app.post("/api/v1/knowledge-cards", response_model=KnowledgeCardResponse, status_code=201)
+    def create_knowledge_card(request: KnowledgeCardWriteRequest, account_id: str, db: Session = Depends(get_db)) -> KnowledgeCardResponse:
+        title, content = request.title.strip(), request.content.strip()
+        if not title or not content:
+            raise HTTPException(status_code=422, detail="knowledge_card_content_required")
+        evidence = knowledge_card_messages_or_422(db, account_id, request.message_ids)
+        card = KnowledgeCard(id=str(uuid.uuid4()), account_id=account_id, card_type=request.card_type, title=title, content=content)
+        db.add(card)
+        db.flush()
+        for message in evidence:
+            db.add(KnowledgeCardEvidence(id=str(uuid.uuid4()), card_id=card.id, message_id=message.id))
+        record_knowledge_card_history(db, card, "created", evidence)
+        db.commit()
+        card = db.scalar(select(KnowledgeCard).where(KnowledgeCard.id == card.id).options(selectinload(KnowledgeCard.evidence).selectinload(KnowledgeCardEvidence.message).selectinload(Message.conversation)))
+        return knowledge_card_response(card)
+
+    @app.patch("/api/v1/knowledge-cards/{card_id}", response_model=KnowledgeCardResponse)
+    def update_knowledge_card(card_id: str, request: KnowledgeCardWriteRequest, account_id: str, db: Session = Depends(get_db)) -> KnowledgeCardResponse:
+        card = db.scalar(select(KnowledgeCard).where(KnowledgeCard.id == card_id, KnowledgeCard.account_id == account_id))
+        if not card:
+            raise HTTPException(status_code=404, detail="knowledge_card_not_found")
+        title, content = request.title.strip(), request.content.strip()
+        if not title or not content:
+            raise HTTPException(status_code=422, detail="knowledge_card_content_required")
+        evidence = knowledge_card_messages_or_422(db, account_id, request.message_ids)
+        card.card_type, card.title, card.content = request.card_type, title, content
+        db.query(KnowledgeCardEvidence).filter(KnowledgeCardEvidence.card_id == card.id).delete()
+        for message in evidence:
+            db.add(KnowledgeCardEvidence(id=str(uuid.uuid4()), card_id=card.id, message_id=message.id))
+        record_knowledge_card_history(db, card, "updated", evidence)
+        db.commit()
+        card = db.scalar(select(KnowledgeCard).where(KnowledgeCard.id == card.id).options(selectinload(KnowledgeCard.evidence).selectinload(KnowledgeCardEvidence.message).selectinload(Message.conversation)))
+        return knowledge_card_response(card)
+
+    @app.delete("/api/v1/knowledge-cards/{card_id}", status_code=204)
+    def delete_knowledge_card(card_id: str, account_id: str, db: Session = Depends(get_db)) -> None:
+        card = db.scalar(select(KnowledgeCard).where(KnowledgeCard.id == card_id, KnowledgeCard.account_id == account_id).options(selectinload(KnowledgeCard.evidence).selectinload(KnowledgeCardEvidence.message)))
+        if not card:
+            raise HTTPException(status_code=404, detail="knowledge_card_not_found")
+        record_knowledge_card_history(db, card, "deleted", [link.message for link in card.evidence])
+        db.delete(card)
+        db.commit()
+
+    @app.get("/api/v1/knowledge-cards/{card_id}/history", response_model=list[KnowledgeCardHistoryResponse])
+    def knowledge_card_history(card_id: str, account_id: str, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)) -> list[KnowledgeCardHistoryResponse]:
+        card = db.scalar(select(KnowledgeCard).where(KnowledgeCard.id == card_id, KnowledgeCard.account_id == account_id))
+        has_history = db.scalar(select(KnowledgeCardHistoryEvent.id).where(KnowledgeCardHistoryEvent.card_id == card_id, KnowledgeCardHistoryEvent.account_id == account_id).limit(1))
+        if not card and not has_history:
+            raise HTTPException(status_code=404, detail="knowledge_card_not_found")
+        events = db.scalars(select(KnowledgeCardHistoryEvent).where(KnowledgeCardHistoryEvent.card_id == card_id, KnowledgeCardHistoryEvent.account_id == account_id).options(selectinload(KnowledgeCardHistoryEvent.evidence).selectinload(KnowledgeCardHistoryEvidence.message).selectinload(Message.conversation)).order_by(KnowledgeCardHistoryEvent.occurred_at.desc(), KnowledgeCardHistoryEvent.id.desc()).limit(limit)).all()
+        return [knowledge_card_history_response(event) for event in events]
 
     @app.get("/api/v1/messages/search", response_model=list[MessageSearchItem])
     def search_messages(

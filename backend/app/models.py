@@ -174,6 +174,58 @@ class ContactProfileHistoryEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class KnowledgeCard(Base):
+    __tablename__ = "knowledge_cards"
+    __table_args__ = (Index("ix_knowledge_card_account_updated", "account_id", "updated_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    card_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    evidence: Mapped[list["KnowledgeCardEvidence"]] = relationship(back_populates="card", cascade="all, delete-orphan")
+
+
+class KnowledgeCardEvidence(Base):
+    __tablename__ = "knowledge_card_evidence"
+    __table_args__ = (UniqueConstraint("card_id", "message_id", name="uq_knowledge_card_evidence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    card_id: Mapped[str] = mapped_column(ForeignKey("knowledge_cards.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    card: Mapped[KnowledgeCard] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
+
+
+class KnowledgeCardHistoryEvent(Base):
+    __tablename__ = "knowledge_card_history_events"
+    __table_args__ = (Index("ix_knowledge_card_history_account_occurred", "account_id", "occurred_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    card_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    card_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    evidence: Mapped[list["KnowledgeCardHistoryEvidence"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+
+
+class KnowledgeCardHistoryEvidence(Base):
+    __tablename__ = "knowledge_card_history_evidence"
+    __table_args__ = (UniqueConstraint("event_id", "message_id", name="uq_knowledge_card_history_evidence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("knowledge_card_history_events.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    event: Mapped[KnowledgeCardHistoryEvent] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)

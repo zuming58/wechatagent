@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type SyncRun, type SyncSchedule } from "./api";
+import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type SyncRun, type SyncSchedule } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 const factKindLabels: Record<FactKind, string> = {
@@ -17,6 +17,7 @@ const factHistoryLabels: Record<FactHistoryEvent["event_type"], string> = {
 };
 const emptyFact = (): FactWrite => ({ kind: "company", content: "", message_ids: [] });
 const emptyProfile = (): ContactProfileWrite => ({ remark_name: "", confirmed_real_name: "", company: "", role: "" });
+const emptyKnowledgeCard = (): KnowledgeCardWrite => ({ card_type: "note", title: "", content: "", message_ids: [] });
 
 function avatar(contact: Contact) {
   return contact.avatar_ref ? <img src={contact.avatar_ref} alt="" /> : <span>{contact.display_name.slice(0, 1)}</span>;
@@ -68,6 +69,11 @@ export function App() {
   const [context, setContext] = useState<MessageContext | null>(null);
   const [schedule, setSchedule] = useState<SyncSchedule | null>(null);
   const [syncRuns, setSyncRuns] = useState<SyncRun[]>([]);
+  const [knowledgeCards, setKnowledgeCards] = useState<KnowledgeCard[]>([]);
+  const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeCardWrite | null>(null);
+  const [editingKnowledgeCardId, setEditingKnowledgeCardId] = useState<string | null>(null);
+  const [knowledgeHistory, setKnowledgeHistory] = useState<KnowledgeCardHistoryEvent[]>([]);
+  const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -126,6 +132,13 @@ export function App() {
     }
     let active = true;
     Promise.resolve(api.syncRuns(accountId)).then((items) => active && setSyncRuns(items ?? [])).catch(() => active && setNotice("同步记录读取失败。"));
+    return () => { active = false; };
+  }, [accountId]);
+
+  useEffect(() => {
+    if (!accountId) { setKnowledgeCards([]); return; }
+    let active = true;
+    Promise.resolve(api.knowledgeCards(accountId)).then((items) => active && setKnowledgeCards(items ?? [])).catch(() => active && setNotice("知识卡读取失败。"));
     return () => { active = false; };
   }, [accountId]);
 
@@ -313,6 +326,33 @@ export function App() {
     }
   }
 
+  async function saveKnowledgeCard() {
+    if (!accountId || !knowledgeDraft || !knowledgeDraft.title.trim() || !knowledgeDraft.content.trim()) return;
+    try {
+      const payload = { ...knowledgeDraft, title: knowledgeDraft.title.trim(), content: knowledgeDraft.content.trim() };
+      const saved = editingKnowledgeCardId ? await api.updateKnowledgeCard(editingKnowledgeCardId, accountId, payload) : await api.createKnowledgeCard(accountId, payload);
+      setKnowledgeCards((current) => editingKnowledgeCardId ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
+      setKnowledgeDraft(null); setEditingKnowledgeCardId(null);
+    } catch { setNotice("知识卡未保存，请检查本地证据。 "); }
+  }
+
+  async function removeKnowledgeCard(cardId: string) {
+    if (!accountId) return;
+    try { await api.deleteKnowledgeCard(cardId, accountId); setKnowledgeCards((current) => current.filter((item) => item.id !== cardId)); }
+    catch { setNotice("知识卡未删除。 "); }
+  }
+
+  function toggleKnowledgeEvidence(messageId: string) {
+    setKnowledgeDraft((current) => current ? { ...current, message_ids: current.message_ids.includes(messageId) ? current.message_ids.filter((id) => id !== messageId) : [...current.message_ids, messageId] } : current);
+  }
+
+  async function showKnowledgeHistory(cardId: string) {
+    if (!accountId) return;
+    if (knowledgeHistoryCardId === cardId) { setKnowledgeHistoryCardId(null); setKnowledgeHistory([]); return; }
+    try { setKnowledgeHistory(await api.knowledgeCardHistory(cardId, accountId)); setKnowledgeHistoryCardId(cardId); }
+    catch { setNotice("知识卡历史读取失败。 "); }
+  }
+
   const messageRows = (items: Message[], emptyCopy: string, canUseForFact = false) => {
     if (!items.length && !evidenceLoading) return <p className="empty-message">{emptyCopy}</p>;
     return items.map((item) => <article className="message-row" key={item.id}>
@@ -342,6 +382,7 @@ export function App() {
           <section className="card profile-card"><header className="card-heading"><h2><UsersThree weight="fill" />联系人档案</h2><span><button className="link" disabled={!selected} onClick={() => setProfileHistoryOpen((current) => !current)}>资料历史</button><button className="link" disabled={!selected} onClick={beginProfileEdit}>编辑资料</button></span></header>{selected ? <><p>用户维护资料只保存在本机，不会被同步覆盖，也不会由聊天自动推断。</p><dl className="profile-fields"><div><dt>备注</dt><dd>{selected.user_remark_name ?? selected.remark_name ?? "暂无"}<small>{selected.user_remark_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>确认实名</dt><dd>{selected.user_confirmed_real_name ?? selected.confirmed_real_name ?? "暂无"}<small>{selected.user_confirmed_real_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>公司</dt><dd>{selected.effective_company ?? selected.company ?? "暂无"}<small>{selected.user_company ? "用户维护" : "采集资料"}</small></dd></div><div><dt>角色</dt><dd>{selected.effective_role ?? selected.role ?? "暂无"}<small>{selected.user_role ? "用户维护" : "采集资料"}</small></dd></div></dl>{profileDraft && <form className="profile-editor" onSubmit={(event) => { event.preventDefault(); void saveProfile(profileDraft); }}><label>备注<input value={profileDraft.remark_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, remark_name: event.target.value })} maxLength={255} /></label><label>确认实名<input value={profileDraft.confirmed_real_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, confirmed_real_name: event.target.value })} maxLength={255} /></label><label>公司<input value={profileDraft.company ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, company: event.target.value })} maxLength={255} /></label><label>角色<input value={profileDraft.role ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} maxLength={255} /></label><footer><button type="button" className="link" onClick={() => setProfileDraft(null)}>取消</button><button className="primary" type="submit" disabled={profileSaving}>{profileSaving ? "保存中…" : "保存资料"}</button></footer></form>}{!profileDraft && <button className="link clear-profile" disabled={profileSaving || ![selected.user_remark_name, selected.user_confirmed_real_name, selected.user_company, selected.user_role].some(Boolean)} onClick={() => void saveProfile(emptyProfile())}>清除用户维护</button>}{profileHistoryOpen && <section className="profile-history"><h3>资料历史</h3>{profileHistoryLoading ? <p className="empty-message">正在读取资料历史…</p> : !profileHistory.length ? <p className="empty-message">当前联系人尚无资料操作历史。</p> : <div className="profile-history-list">{profileHistory.map((event) => <article key={event.id}><strong>{profileSnapshot(event)}</strong><time>{formatMessageTime(event.occurred_at)}</time><span>用户操作记录</span></article>)}</div>}</section>}</> : <p className="empty-message">选择联系人后可维护本地资料。</p>}</section>
           <section className="card confirmed"><header className="card-heading"><h2><CheckCircle weight="fill" />已确认的事实</h2><span><button className="link" disabled={!selected} onClick={() => setHistoryOpen((current) => !current)}>事实历史</button><button className="link" disabled={!selected} onClick={() => beginFact()}>添加事实</button></span></header><p>仅由用户手动记录或确认；系统不会从聊天自动推断事实。</p>{factDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveFact(); }}><label>类型<select value={factDraft.kind} onChange={(event) => setFactDraft({ ...factDraft, kind: event.target.value as FactKind })}>{Object.entries(factKindLabels).map(([kind, label]) => <option value={kind} key={kind}>{label}</option>)}</select></label><label>内容<textarea value={factDraft.content} onChange={(event) => setFactDraft({ ...factDraft, content: event.target.value })} placeholder="输入用户确认的内容" maxLength={2000} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={factDraft.message_ids.includes(message.id)} onChange={() => toggleFactEvidence(message.id)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>无原文证据时将标记为“用户手动记录”。</p>}</fieldset><footer><button type="button" className="link" onClick={() => { setFactDraft(null); setEditingFactId(null); }}>取消</button><button className="primary" type="submit" disabled={factSaving || !factDraft.content.trim()}>{factSaving ? "保存中…" : editingFactId ? "保存修改" : "保存事实"}</button></footer></form>}{factsLoading ? <p className="empty-message">正在读取已确认事实…</p> : !facts.length ? <p className="empty-message">尚无已确认事实。可手动记录，或从聊天证据添加原文关联。</p> : <div className="fact-list">{facts.map((fact) => <article className="fact-row" key={fact.id}><div><strong>{factKindLabels[fact.kind]}</strong><time>更新于 {formatMessageTime(fact.updated_at)}</time></div><p>{fact.content}</p><footer>{fact.evidence.length ? <button className="link" onClick={() => showContext(fact.evidence[0])}>原文证据 {fact.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => editFact(fact)}>编辑</button><button className="link danger" onClick={() => void removeFact(fact.id)}>删除</button></span></footer></article>)}</div>}{historyOpen && <section className="fact-history"><h3>事实历史</h3>{historyLoading ? <p className="empty-message">正在读取事实历史…</p> : !factHistory.length ? <p className="empty-message">当前联系人尚无事实操作历史。</p> : <div className="fact-list">{factHistory.map((event) => <article className="fact-row history-row" key={event.id}><div><strong>{factHistoryLabels[event.event_type]} · {factKindLabels[event.kind]}</strong><time>{formatMessageTime(event.occurred_at)}</time></div><p>{event.content}</p><footer>{event.evidence.length ? <button className="link" onClick={() => showContext(event.evidence[0])}>原文证据 {event.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span className="history-source">用户操作记录</span></footer></article>)}</div>}</section>}</section>
           <section className="card ai"><h2><ChatCircleDots weight="fill" />原文搜索</h2><div className="search-results"><label className="inline-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search}>搜索</button></label><div className="search-filters"><label>消息类型<select value={searchFilters.message_type ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, message_type: event.target.value || undefined })}><option value="">全部</option><option value="text">文本</option><option value="file">文件</option><option value="link">链接</option><option value="image">图片</option><option value="voice">语音</option></select></label><label>开始日期<input type="date" value={searchFilters.date_from ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, date_from: event.target.value || undefined })} /></label><label>结束日期<input type="date" value={searchFilters.date_to ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, date_to: event.target.value || undefined })} /></label><label className="search-check"><input type="checkbox" checked={Boolean(searchFilters.contact_id)} disabled={!selected} onChange={(event) => setSearchFilters({ ...searchFilters, contact_id: event.target.checked ? selected?.id : undefined })} />当前联系人</label><label className="search-check"><input type="checkbox" checked={Boolean(searchFilters.has_attachment)} onChange={(event) => setSearchFilters({ ...searchFilters, has_attachment: event.target.checked || undefined })} />仅含附件</label></div>{messageRows(results, "输入关键词后可查看原文命中与上下文。")}</div></section>
+          <section className="card knowledge-card"><header className="card-heading"><h2><LinkSimple weight="fill" />本地知识卡</h2><button className="link" onClick={() => { setKnowledgeDraft(emptyKnowledgeCard()); setEditingKnowledgeCardId(null); }}>新建知识卡</button></header><p>仅由用户手动整理，原文证据可选；不会由 AI 或同步自动生成。</p>{knowledgeDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveKnowledgeCard(); }}><label>类型<select value={knowledgeDraft.card_type} onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, card_type: event.target.value as KnowledgeCardType })}><option value="note">笔记</option><option value="contact">联系人</option><option value="project">项目</option><option value="decision">决策</option></select></label><label>标题<input value={knowledgeDraft.title} onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, title: event.target.value })} required /></label><label>内容<textarea value={knowledgeDraft.content} onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, content: event.target.value })} required /></label><fieldset><legend>当前联系人原文证据（可选）</legend>{evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={knowledgeDraft.message_ids.includes(message.id)} onChange={() => toggleKnowledgeEvidence(message.id)} />{message.conversation_name} · {message.text_content}</label>)}</fieldset><footer><button type="button" className="link" onClick={() => setKnowledgeDraft(null)}>取消</button><button className="primary" type="submit">保存知识卡</button></footer></form>}{!knowledgeCards.length ? <p className="empty-message">尚无本地知识卡。</p> : <div className="fact-list">{knowledgeCards.map((card) => <article className="fact-row" key={card.id}><div><strong>{card.title}</strong><time>{formatMessageTime(card.updated_at)}</time></div><p>{card.content}</p><footer>{card.evidence.length ? <button className="link" onClick={() => showContext(card.evidence[0])}>原文证据 {card.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => void showKnowledgeHistory(card.id)}>历史</button><button className="link" onClick={() => { setEditingKnowledgeCardId(card.id); setKnowledgeDraft({ card_type: card.card_type, title: card.title, content: card.content, message_ids: card.evidence.map((item) => item.id) }); }}>编辑</button><button className="link danger" onClick={() => void removeKnowledgeCard(card.id)}>删除</button></span></footer>{knowledgeHistoryCardId === card.id && <div className="profile-history-list">{knowledgeHistory.map((event) => <article key={event.id}><strong>{event.event_type} · {event.title}</strong><time>{formatMessageTime(event.occurred_at)}</time><span>{event.content}</span></article>)}</div>}</article>)}</div>}</section>
         </>}
         {activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。", true)}</div></section>}
         {context && <section className="card context-card"><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}

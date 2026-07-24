@@ -71,6 +71,10 @@ export type ContactProfileHistoryEvent = {
   user_role?: string | null;
   occurred_at: string;
 };
+export type KnowledgeCardType = "contact" | "project" | "decision" | "note";
+export type KnowledgeCardWrite = { card_type: KnowledgeCardType; title: string; content: string; message_ids: string[] };
+export type KnowledgeCard = { id: string; account_id: string; card_type: KnowledgeCardType; title: string; content: string; created_at: string; updated_at: string; evidence: Message[] };
+export type KnowledgeCardHistoryEvent = { id: string; account_id: string; card_id: string; event_type: "created" | "updated" | "deleted"; card_type: KnowledgeCardType; title: string; content: string; occurred_at: string; evidence: Message[] };
 
 export class LocalApiError extends Error {
   constructor(public readonly status: number, public readonly errorCode?: string, public readonly reason?: string) {
@@ -101,6 +105,11 @@ export const api = {
   createFact: (contactId: string, accountId: string, payload: FactWrite) => request<Fact>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
   updateFact: (factId: string, accountId: string, payload: FactWrite) => request<Fact>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteFact: (factId: string, accountId: string) => request<void>(`/facts/${encodeURIComponent(factId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
+  knowledgeCards: (accountId: string) => request<KnowledgeCard[]>(`/knowledge-cards?account_id=${encodeURIComponent(accountId)}`),
+  createKnowledgeCard: (accountId: string, payload: KnowledgeCardWrite) => request<KnowledgeCard>(`/knowledge-cards?account_id=${encodeURIComponent(accountId)}`, { method: "POST", body: JSON.stringify(payload) }),
+  updateKnowledgeCard: (cardId: string, accountId: string, payload: KnowledgeCardWrite) => request<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(cardId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteKnowledgeCard: (cardId: string, accountId: string) => request<void>(`/knowledge-cards/${encodeURIComponent(cardId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
+  knowledgeCardHistory: (cardId: string, accountId: string) => request<KnowledgeCardHistoryEvent[]>(`/knowledge-cards/${encodeURIComponent(cardId)}/history?account_id=${encodeURIComponent(accountId)}`),
   search: (accountId: string, query: string, filters?: MessageSearchFilters) => {
     const params = new URLSearchParams({ account_id: accountId, q: query });
     for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));

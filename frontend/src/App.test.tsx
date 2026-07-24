@@ -21,6 +21,11 @@ vi.mock("./api", async () => {
       sync: vi.fn(),
       syncRuns: vi.fn(),
       syncSchedule: vi.fn(),
+      knowledgeCards: vi.fn(),
+      createKnowledgeCard: vi.fn(),
+      updateKnowledgeCard: vi.fn(),
+      deleteKnowledgeCard: vi.fn(),
+      knowledgeCardHistory: vi.fn(),
     },
   };
 });
@@ -64,6 +69,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.sync.mockResolvedValue({ id: "synthetic-run", status: "completed", inserted_count: 0, duplicate_count: 0 });
   mockedApi.syncRuns.mockResolvedValue([]);
   mockedApi.syncSchedule.mockResolvedValue({ enabled: true, interval_seconds: 300 });
+  mockedApi.knowledgeCards.mockResolvedValue([]);
   return render(<App />);
 }
 
