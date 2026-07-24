@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
 from .models import ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
-from .schemas import AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .schemas import AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -640,6 +640,87 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             raise HTTPException(status_code=404, detail="knowledge_card_not_found")
         events = db.scalars(select(KnowledgeCardHistoryEvent).where(KnowledgeCardHistoryEvent.card_id == card_id, KnowledgeCardHistoryEvent.account_id == account_id).options(selectinload(KnowledgeCardHistoryEvent.evidence).selectinload(KnowledgeCardHistoryEvidence.message).selectinload(Message.conversation)).order_by(KnowledgeCardHistoryEvent.occurred_at.desc(), KnowledgeCardHistoryEvent.id.desc()).limit(limit)).all()
         return [knowledge_card_history_response(event) for event in events]
+
+    @app.get("/api/v1/timeline", response_model=list[TimelineEventResponse])
+    def timeline(
+        account_id: str,
+        kind: list[str] = Query(default=[]),
+        contact_id: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        limit: int = Query(100, ge=1, le=200),
+        db: Session = Depends(get_db),
+    ) -> list[TimelineEventResponse]:
+        allowed_kinds = {"message", "fact", "profile", "knowledge_card", "action_item"}
+        selected_kinds = set(kind) or allowed_kinds
+        if not selected_kinds.issubset(allowed_kinds):
+            raise HTTPException(status_code=422, detail="timeline_kind_not_supported")
+
+        contact = account_contact_or_404(db, contact_id, account_id) if contact_id else None
+        start_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc) if date_from else None
+        end_at = datetime.combine(date_to, time.max, tzinfo=timezone.utc) if date_to else None
+        contacts = {item.id: item for item in db.scalars(select(Contact).where(Contact.account_id == account_id))}
+        events: list[TimelineEventResponse] = []
+
+        if "message" in selected_kinds:
+            statement = select(Message).join(Conversation, Message.conversation_id == Conversation.id).where(Message.account_id == account_id).options(selectinload(Message.conversation))
+            if contact:
+                statement = statement.where(or_(
+                    and_(Conversation.conversation_type == "private", Conversation.source_id == contact.source_id),
+                    and_(Conversation.conversation_type == "group", Message.sender_id == contact.source_id),
+                ))
+            if start_at:
+                statement = statement.where(Message.sent_at >= start_at)
+            if end_at:
+                statement = statement.where(Message.sent_at <= end_at)
+            for message in db.scalars(statement.order_by(Message.sent_at.desc(), Message.id.desc()).limit(limit)):
+                item = message_item(message, message.conversation)
+                events.append(TimelineEventResponse(id=message.id, account_id=account_id, kind="message", event_type=message.message_type, occurred_at=message.sent_at, title=f"{item.conversation_name} · {item.sender_display_name}", content=message.text_content, contact_id=contact.id if contact else None, contact_display_name=contact.display_name if contact else None, message=item))
+
+        if "fact" in selected_kinds:
+            statement = select(FactHistoryEvent).where(FactHistoryEvent.account_id == account_id).options(selectinload(FactHistoryEvent.evidence).selectinload(FactHistoryMessageEvidence.message).selectinload(Message.conversation))
+            if contact:
+                statement = statement.where(FactHistoryEvent.contact_id == contact.id)
+            if start_at:
+                statement = statement.where(FactHistoryEvent.occurred_at >= start_at)
+            if end_at:
+                statement = statement.where(FactHistoryEvent.occurred_at <= end_at)
+            for event in db.scalars(statement.order_by(FactHistoryEvent.occurred_at.desc(), FactHistoryEvent.id.desc()).limit(limit)):
+                owner = contacts.get(event.contact_id)
+                events.append(TimelineEventResponse(id=event.id, account_id=account_id, kind="fact", event_type=event.event_type, occurred_at=event.occurred_at, title=f"已确认事实 · {event.kind}", content=event.content, contact_id=event.contact_id, contact_display_name=owner.display_name if owner else None, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence]))
+
+        if "profile" in selected_kinds:
+            statement = select(ContactProfileHistoryEvent).where(ContactProfileHistoryEvent.account_id == account_id)
+            if contact:
+                statement = statement.where(ContactProfileHistoryEvent.contact_id == contact.id)
+            if start_at:
+                statement = statement.where(ContactProfileHistoryEvent.occurred_at >= start_at)
+            if end_at:
+                statement = statement.where(ContactProfileHistoryEvent.occurred_at <= end_at)
+            for event in db.scalars(statement.order_by(ContactProfileHistoryEvent.occurred_at.desc(), ContactProfileHistoryEvent.id.desc()).limit(limit)):
+                owner = contacts.get(event.contact_id)
+                values = [event.user_remark_name, event.user_confirmed_real_name, event.user_company, event.user_role]
+                events.append(TimelineEventResponse(id=event.id, account_id=account_id, kind="profile", event_type="updated", occurred_at=event.occurred_at, title="联系人资料已更新", content=" · ".join(value for value in values if value) or "已清除全部用户维护资料", contact_id=event.contact_id, contact_display_name=owner.display_name if owner else None))
+
+        if not contact and "knowledge_card" in selected_kinds:
+            statement = select(KnowledgeCardHistoryEvent).where(KnowledgeCardHistoryEvent.account_id == account_id).options(selectinload(KnowledgeCardHistoryEvent.evidence).selectinload(KnowledgeCardHistoryEvidence.message).selectinload(Message.conversation))
+            if start_at:
+                statement = statement.where(KnowledgeCardHistoryEvent.occurred_at >= start_at)
+            if end_at:
+                statement = statement.where(KnowledgeCardHistoryEvent.occurred_at <= end_at)
+            for event in db.scalars(statement.order_by(KnowledgeCardHistoryEvent.occurred_at.desc(), KnowledgeCardHistoryEvent.id.desc()).limit(limit)):
+                events.append(TimelineEventResponse(id=event.id, account_id=account_id, kind="knowledge_card", event_type=event.event_type, occurred_at=event.occurred_at, title=f"本地知识卡 · {event.title}", content=event.content, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence]))
+
+        if not contact and "action_item" in selected_kinds:
+            statement = select(ActionItemHistoryEvent).where(ActionItemHistoryEvent.account_id == account_id).options(selectinload(ActionItemHistoryEvent.evidence).selectinload(ActionItemHistoryEvidence.message).selectinload(Message.conversation))
+            if start_at:
+                statement = statement.where(ActionItemHistoryEvent.occurred_at >= start_at)
+            if end_at:
+                statement = statement.where(ActionItemHistoryEvent.occurred_at <= end_at)
+            for event in db.scalars(statement.order_by(ActionItemHistoryEvent.occurred_at.desc(), ActionItemHistoryEvent.id.desc()).limit(limit)):
+                events.append(TimelineEventResponse(id=event.id, account_id=account_id, kind="action_item", event_type=event.event_type, occurred_at=event.occurred_at, title=f"手动待办 · {event.status}", content=event.content, evidence=[message_item(link.message, link.message.conversation) for link in event.evidence]))
+
+        return sorted(events, key=lambda event: (event.occurred_at, event.id), reverse=True)[:limit]
 
     @app.get("/api/v1/messages/search", response_model=list[MessageSearchItem])
     def search_messages(

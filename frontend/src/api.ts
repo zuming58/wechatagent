@@ -29,6 +29,9 @@ export type Attachment = { name?: string | null; mime_type?: string | null; size
 export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string; attachments?: Attachment[] };
 export type MessageSearchFilters = { conversation_id?: string; contact_id?: string; message_type?: string; date_from?: string; date_to?: string; has_attachment?: boolean };
 export type MessageContext = { anchor_id: string; messages: Message[] };
+export type TimelineKind = "message" | "fact" | "profile" | "knowledge_card" | "action_item";
+export type TimelineEvent = { id: string; account_id: string; kind: TimelineKind; event_type: string; occurred_at: string; title: string; content: string; contact_id?: string | null; contact_display_name?: string | null; message?: Message | null; evidence: Message[] };
+export type TimelineFilters = { kinds?: TimelineKind[]; contact_id?: string; date_from?: string; date_to?: string; limit?: number };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
 export type SyncSchedule = {
   enabled: boolean;
@@ -120,6 +123,15 @@ export const api = {
   updateActionItem: (itemId: string, accountId: string, payload: ActionItemWrite) => request<ActionItem>(`/action-items/${encodeURIComponent(itemId)}?account_id=${encodeURIComponent(accountId)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteActionItem: (itemId: string, accountId: string) => request<void>(`/action-items/${encodeURIComponent(itemId)}?account_id=${encodeURIComponent(accountId)}`, { method: "DELETE" }),
   actionItemHistory: (itemId: string, accountId: string) => request<ActionItemHistoryEvent[]>(`/action-items/${encodeURIComponent(itemId)}/history?account_id=${encodeURIComponent(accountId)}`),
+  timeline: (accountId: string, filters: TimelineFilters = {}) => {
+    const params = new URLSearchParams({ account_id: accountId });
+    for (const kind of filters.kinds ?? []) params.append("kind", kind);
+    if (filters.contact_id) params.set("contact_id", filters.contact_id);
+    if (filters.date_from) params.set("date_from", filters.date_from);
+    if (filters.date_to) params.set("date_to", filters.date_to);
+    if (filters.limit) params.set("limit", String(filters.limit));
+    return request<TimelineEvent[]>(`/timeline?${params.toString()}`);
+  },
   search: (accountId: string, query: string, filters?: MessageSearchFilters) => {
     const params = new URLSearchParams({ account_id: accountId, q: query });
     for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));

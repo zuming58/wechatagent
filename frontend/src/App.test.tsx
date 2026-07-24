@@ -32,12 +32,13 @@ vi.mock("./api", async () => {
       updateActionItem: vi.fn(),
       deleteActionItem: vi.fn(),
       actionItemHistory: vi.fn(),
+      timeline: vi.fn(),
     },
   };
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -61,6 +62,7 @@ function renderWithSource(source: SourceStatus, data: {
   actionHistory?: ActionItemHistoryEvent[];
   search?: Message[];
   context?: MessageContext;
+  timeline?: TimelineEvent[];
 } = {}) {
   mockedApi.sourceStatus.mockResolvedValue(source);
   mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
@@ -85,6 +87,7 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.deleteActionItem.mockResolvedValue(undefined);
   mockedApi.actionItems.mockResolvedValue(data.actionItems ?? []);
   mockedApi.actionItemHistory.mockResolvedValue(data.actionHistory ?? []);
+  mockedApi.timeline.mockResolvedValue(data.timeline ?? []);
   return render(<App />);
 }
 
@@ -417,10 +420,28 @@ describe("multi-account sync safety gate", () => {
     expect(await screen.findByRole("heading", { name: "消息上下文" })).toBeInTheDocument();
   });
 
-  it("marks unopened timeline and tag navigation as disabled", async () => {
+  it("opens the read-only timeline, filters it by the selected contact, and opens source context", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const message = { id: "timeline-message", conversation_id: "group-1", conversation_name: "Synthetic Group", conversation_type: "group", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "Timeline source", snippet: "Timeline source" };
+    const event: TimelineEvent = { id: "timeline-event", account_id: "account-b", kind: "fact", event_type: "created", occurred_at: "2026-07-23T12:01:00Z", title: "已确认事实 · need", content: "User-confirmed requirement", contact_id: contact.id, contact_display_name: contact.display_name, evidence: [message] };
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], timeline: [event], context: { anchor_id: message.id, messages: [message] } });
+
+    await screen.findByRole("button", { name: /Synthetic Contact/ });
+    fireEvent.click(screen.getByRole("button", { name: "时间线" }));
+    await waitFor(() => expect(mockedApi.timeline).toHaveBeenCalledWith("account-b", { kinds: ["message", "fact", "profile", "knowledge_card", "action_item"], contact_id: undefined }));
+    expect(await screen.findByRole("heading", { name: "本地时间线" })).toBeInTheDocument();
+    expect(screen.getByText("User-confirmed requirement")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("timeline-message"));
+    fireEvent.click(screen.getByLabelText("当前联系人"));
+    await waitFor(() => expect(mockedApi.timeline).toHaveBeenLastCalledWith("account-b", { kinds: ["message", "fact", "profile", "knowledge_card", "action_item"], contact_id: "contact-zhang" }));
+  });
+
+  it("keeps unopened tag navigation disabled", async () => {
     renderWithSource(sourceStatus({ status: "connector_missing", reason: "Synthetic connector is unavailable." }));
 
-    expect(await screen.findByRole("button", { name: /时间线/ })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /时间线/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /标签管理/ })).toBeDisabled();
   });
 });

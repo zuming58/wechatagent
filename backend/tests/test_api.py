@@ -614,6 +614,38 @@ def test_user_action_items_are_account_isolated_and_manually_completed(client):
     assert client.get(f"/api/v1/action-items/{item['id']}/history", params={"account_id": "other-account"}).status_code == 404
 
 
+def test_timeline_merges_archived_messages_and_user_history_with_account_isolation(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    contacts = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()
+    zhang = next(item for item in contacts if item["source_id"] == "wxid_zhang")
+    message = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()[0]
+
+    fact = client.post(f"/api/v1/contacts/{zhang['id']}/facts", params={"account_id": "dev-account"}, json={"kind": "need", "content": "User-confirmed local requirement", "message_ids": [message["id"]]})
+    assert fact.status_code == 201
+    profile = client.patch(f"/api/v1/contacts/{zhang['id']}/profile", params={"account_id": "dev-account"}, json={"remark_name": "User Remark", "confirmed_real_name": None, "company": None, "role": None})
+    assert profile.status_code == 200
+    action = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "open", "message_ids": [message["id"]]})
+    assert action.status_code == 201
+
+    timeline = client.get("/api/v1/timeline", params=[("account_id", "dev-account"), ("kind", "message"), ("kind", "fact"), ("kind", "profile"), ("kind", "action_item")])
+    assert timeline.status_code == 200
+    events = timeline.json()
+    assert {"message", "fact", "profile", "action_item"}.issubset({event["kind"] for event in events})
+    assert [event["occurred_at"] for event in events] == sorted((event["occurred_at"] for event in events), reverse=True)
+    fact_event = next(event for event in events if event["kind"] == "fact")
+    assert fact_event["contact_id"] == zhang["id"]
+    assert fact_event["evidence"][0]["id"] == message["id"]
+
+    contact_timeline = client.get("/api/v1/timeline", params={"account_id": "dev-account", "contact_id": zhang["id"], "limit": 2})
+    assert contact_timeline.status_code == 200
+    assert len(contact_timeline.json()) == 2
+    assert {event["kind"] for event in contact_timeline.json()}.issubset({"message", "fact", "profile"})
+    assert all(event["contact_id"] == zhang["id"] for event in contact_timeline.json())
+
+    assert client.get("/api/v1/timeline", params={"account_id": "another-account"}).json() == []
+    assert client.get("/api/v1/timeline", params={"account_id": "dev-account", "kind": "not-supported"}).status_code == 422
+
+
 def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):
     database_path = tmp_path / "migrations.db"
     config = Config("alembic.ini")

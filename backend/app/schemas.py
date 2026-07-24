@@ -131,6 +131,20 @@ class MessageContextResponse(BaseModel):
     messages: list[MessageSearchItem]
 
 
+class TimelineEventResponse(BaseModel):
+    id: str
+    account_id: str
+    kind: str
+    event_type: str
+    occurred_at: datetime
+    title: str
+    content: str
+    contact_id: str | None = None
+    contact_display_name: str | None = None
+    message: MessageSearchItem | None = None
+    evidence: list[MessageSearchItem] = []
+
+
 class FactWriteRequest(BaseModel):
     kind: str = Field(pattern="^(company|role|need|concern|commitment)$")
     content: str = Field(min_length=1, max_length=2000)
