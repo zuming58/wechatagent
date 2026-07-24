@@ -220,6 +220,16 @@ describe("multi-account sync safety gate", () => {
     expect(await screen.findByText(/409.*account_not_available.*Choose a detected account/)).toBeInTheDocument();
   });
 
+  it("shows a visible idempotent initial-archive result beside the action controls", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }));
+    mockedApi.sync.mockResolvedValueOnce({ id: "repeat-run", status: "completed", inserted_count: 0, duplicate_count: 5 });
+
+    await waitFor(() => expect(syncButtons()[0]).toBeEnabled());
+    fireEvent.click(syncButtons()[0]);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("首次归档完成：没有新消息，已跳过重复 5 条。");
+  });
+
   it("shows an incomplete-data warning without exposing shard identifiers", async () => {
     renderWithSource(sourceStatus({
       accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }],
@@ -238,10 +248,10 @@ describe("multi-account sync safety gate", () => {
 
     await waitFor(() => expect(syncButtons()[0]).toBeEnabled());
     fireEvent.click(syncButtons()[0]);
-    expect(await screen.findByText(/同步已完成，但数据质量警告.*possibly_stale.*新增 2 条，重复 1 条/)).toBeInTheDocument();
+    expect(await screen.findByText(/首次归档已完成，但数据质量警告.*possibly_stale.*新增 2 条，已跳过重复 1 条/)).toBeInTheDocument();
 
     fireEvent.click(syncButtons()[0]);
-    expect(await screen.findByText("同步未完成（connector_missing）。")).toBeInTheDocument();
+    expect(await screen.findByText("首次归档未完成（connector_missing）。")).toBeInTheDocument();
   });
 
   it("shows last-message timestamps and loads private plus group evidence for the selected contact", async () => {
