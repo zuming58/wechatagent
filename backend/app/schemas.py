@@ -70,6 +70,17 @@ class AccountDeletionRequestResponse(BaseModel):
     expires_at: datetime
 
 
+class PrivacySettingsResponse(BaseModel):
+    local_processing_acknowledged: bool
+    real_collection_authorized: bool = False
+    ai_processing_enabled: bool = False
+    updated_at: datetime | None = None
+
+
+class PrivacySettingsWriteRequest(BaseModel):
+    local_processing_acknowledged: bool
+
+
 class ActionItemWriteRequest(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
     status: str = Field(default="open", pattern="^(open|done)$")

@@ -318,6 +318,14 @@ class AccountDeletionRequest(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class LocalPrivacySettings(Base):
+    __tablename__ = "local_privacy_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    local_processing_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class SyncShard(Base):
     __tablename__ = "sync_shards"
     __table_args__ = (UniqueConstraint("account_id", "source_shard_id", name="uq_sync_shard_source"),)

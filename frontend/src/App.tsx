@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
+import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type PrivacySettings, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
 import "./data-management.css";
+import "./privacy.css";
 
-const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
+const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理", "设置"];
 const factKindLabels: Record<FactKind, string> = {
   company: "公司",
   role: "角色",
@@ -62,6 +63,9 @@ function syncRunSummary(run: SyncRun) {
 
 export function App() {
   const [source, setSource] = useState<SourceStatus | null>(null);
+  const [privacy, setPrivacy] = useState<PrivacySettings | null>(null);
+  const [privacyAcknowledgement, setPrivacyAcknowledgement] = useState(false);
+  const [privacySaving, setPrivacySaving] = useState(false);
   const [accountId, setAccountId] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
@@ -92,7 +96,7 @@ export function App() {
   const [actionDraft, setActionDraft] = useState<ActionItemWrite | null>(null);
   const [actionHistory, setActionHistory] = useState<ActionItemHistoryEvent[]>([]);
   const [actionHistoryItemId, setActionHistoryItemId] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<"relationships" | "actions" | "search" | "timeline" | "tags">("relationships");
+  const [workspace, setWorkspace] = useState<"relationships" | "actions" | "search" | "timeline" | "tags" | "settings">("relationships");
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [timelineKinds, setTimelineKinds] = useState<TimelineKind[]>(["message", "fact", "profile", "knowledge_card", "action_item"]);
   const [timelineContactOnly, setTimelineContactOnly] = useState(false);
@@ -131,6 +135,23 @@ export function App() {
   }, [source, sourceReady, accountSelectionRequired]);
 
   useEffect(() => {
+    let active = true;
+    api.privacySettings().then((payload) => {
+      if (!active) return;
+      setPrivacy(payload);
+      setPrivacyAcknowledgement(payload.local_processing_acknowledged);
+      if (!payload.local_processing_acknowledged) setLoading(false);
+    }).catch(() => {
+      if (active) {
+        setNotice("本地安全设置读取失败。请确认本地 API 已启动。");
+        setLoading(false);
+      }
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!privacy?.local_processing_acknowledged) return;
     api.sourceStatus().then((payload) => {
       setSource(payload);
       if (payload.status === "account_selection_required") {
@@ -141,11 +162,12 @@ export function App() {
       }
     }).catch(() => setNotice("本地 API 未启动。请先启动 backend 服务。"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [privacy?.local_processing_acknowledged]);
 
   useEffect(() => {
+    if (!privacy?.local_processing_acknowledged) return;
     Promise.resolve(api.syncSchedule()).then((payload) => payload && setSchedule(payload)).catch(() => setNotice("自动同步状态读取失败。"));
-  }, []);
+  }, [privacy?.local_processing_acknowledged]);
 
   useEffect(() => {
     if (!accountId || !sourceCanSync) return;
@@ -451,6 +473,20 @@ export function App() {
     }
   }
 
+  async function savePrivacyAcknowledgement() {
+    if (!privacyAcknowledgement) return;
+    setPrivacySaving(true);
+    try {
+      const saved = await api.updatePrivacySettings(true);
+      setPrivacy(saved);
+      setNotice("已确认本地处理边界。数据源检测仍不会安装或执行 wx-cli。");
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `本地安全设置未保存（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请检查本地 API。"}` : "本地安全设置未保存。");
+    } finally {
+      setPrivacySaving(false);
+    }
+  }
+
   async function confirmAccountDeletion() {
     if (!accountId || !deletionRequest || deletionConfirmation !== deletionRequest.confirmation_phrase) return;
     try {
@@ -616,9 +652,30 @@ export function App() {
     <section className="tag-links"><h3>关联本地对象</h3>{!tags.length ? <p className="empty-message">先创建标签，再关联本地对象。</p> : <><div className="tag-link-form"><label>标签<select value={tagAssignmentId} onChange={(event) => setTagAssignmentId(event.target.value)}>{tags.map((tag) => <option value={tag.id} key={tag.id}>{tag.name}</option>)}</select></label><label>对象类型<select value={tagTargetType} onChange={(event) => changeTagTargetType(event.target.value as TagTargetType)}><option value="contact">联系人</option><option value="fact">已确认事实</option><option value="knowledge_card">本地知识卡</option><option value="action_item">手动待办</option></select></label><label>对象<select value={tagTargetId} onChange={(event) => setTagTargetId(event.target.value)} disabled={!tagOptions.length}><option value="">{tagOptions.length ? "请选择对象" : "当前无可关联对象"}</option>{tagOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label><button className="primary" type="button" disabled={!tagAssignmentId || !tagTargetId} onClick={() => void addTagLink()}>添加关联</button></div>{!tagTargetId ? <p className="empty-message">选择一个本地对象后可查看已有标签。</p> : !tagLinks.length ? <p className="empty-message">该对象尚未关联标签。</p> : <div className="tag-link-list">{tagLinks.map((link) => <span key={link.id}><i className="tag-swatch" style={{ backgroundColor: link.tag.color }} />{link.tag.name}<button className="link danger" onClick={() => void removeTagLink(link.tag.id)}>移除</button></span>)}</div>}</>}</section>
   </section>;
 
+  const settingsPanel = <section className="card privacy-settings">
+    <header className="card-heading"><h2><Database weight="fill" />安全设置</h2><span className="search-scope">本地安全模式</span></header>
+    <p>本应用只提供本机数据工作流。安全模式不会安装或执行 wx-cli，也不会读取、解密、导入或上传真实微信聊天数据。</p>
+    <dl>
+      <div><dt>本地处理边界</dt><dd>{privacy?.local_processing_acknowledged ? "已确认" : "尚未确认"}{privacy?.updated_at && <small>更新于 {formatMessageTime(privacy.updated_at)}</small>}</dd></div>
+      <div><dt>真实采集</dt><dd>未获 Go/No-Go 授权</dd></div>
+      <div><dt>AI 与云端处理</dt><dd>已关闭</dd></div>
+    </dl>
+  </section>;
+
+  if (!privacy?.local_processing_acknowledged) return <main className="privacy-onboarding">
+    <section>
+      <span className="privacy-mark"><Database weight="fill" /></span>
+      <p className="privacy-eyebrow">本地安全模式</p>
+      <h1>先确认数据处理边界</h1>
+      <p>本应用仅处理本机已归档的合成数据。本确认不会安装、执行或接入 wx-cli；不会读取、解密、导入或上传任何真实微信聊天数据。</p>
+      {privacy ? <label className="privacy-check"><input type="checkbox" checked={privacyAcknowledgement} onChange={(event) => setPrivacyAcknowledgement(event.target.checked)} />我已了解本地处理边界与真实采集需要单独 Go/No-Go 授权。</label> : <p className="privacy-error">{notice || "正在读取本地安全设置…"}</p>}
+      <button className="primary" disabled={!privacy || !privacyAcknowledgement || privacySaving} onClick={() => void savePrivacyAcknowledgement()}>{privacySaving ? "保存中…" : "继续以本地安全模式使用"}</button>
+    </section>
+  </main>;
+
   return <div className="app-shell">
     <aside className="nav">
-      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item) => { const target = item === "关系记忆" ? "relationships" : item === "待办事项" ? "actions" : item === "全局搜索" ? "search" : item === "时间线" ? "timeline" : item === "标签管理" ? "tags" : null; return <button className={target === workspace ? "active" : ""} key={item} disabled={!target} title={target ? undefined : `${item}正在开发中`} onClick={() => target === "search" ? openGlobalSearch() : target === "timeline" ? openTimeline() : target === "tags" ? openTags() : target && setWorkspace(target)}><UsersThree size={18} />{item}{!target && <small>开发中</small>}</button>; })}</nav></div>
+      <div><div className="brand"><span><LinkSimple weight="bold" /></span>微信关系记忆</div><nav>{nav.map((item) => { const target = item === "关系记忆" ? "relationships" : item === "待办事项" ? "actions" : item === "全局搜索" ? "search" : item === "时间线" ? "timeline" : item === "标签管理" ? "tags" : item === "设置" ? "settings" : null; return <button className={target === workspace ? "active" : ""} key={item} disabled={!target} title={target ? undefined : `${item}正在开发中`} onClick={() => target === "search" ? openGlobalSearch() : target === "timeline" ? openTimeline() : target === "tags" ? openTags() : target && setWorkspace(target)}><UsersThree size={18} />{item}{!target && <small>开发中</small>}</button>; })}</nav></div>
       <div className="local"><Database size={17} /><span>本地关系工作台<small>数据仅存本机</small></span></div>
     </aside>
     <section className="contacts">
@@ -635,6 +692,7 @@ export function App() {
         {workspace === "search" && globalSearchPanel}
         {workspace === "timeline" && timelinePanel}
         {workspace === "tags" && tagPanel}
+        {workspace === "settings" && settingsPanel}
         {workspace === "relationships" && activeTab === "overview" && <>
           <section className="card profile-card"><header className="card-heading"><h2><UsersThree weight="fill" />联系人档案</h2><span><button className="link" disabled={!selected} onClick={() => setProfileHistoryOpen((current) => !current)}>资料历史</button><button className="link" disabled={!selected} onClick={beginProfileEdit}>编辑资料</button></span></header>{selected ? <><p>用户维护资料只保存在本机，不会被同步覆盖，也不会由聊天自动推断。</p><dl className="profile-fields"><div><dt>备注</dt><dd>{selected.user_remark_name ?? selected.remark_name ?? "暂无"}<small>{selected.user_remark_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>确认实名</dt><dd>{selected.user_confirmed_real_name ?? selected.confirmed_real_name ?? "暂无"}<small>{selected.user_confirmed_real_name ? "用户维护" : "采集资料"}</small></dd></div><div><dt>公司</dt><dd>{selected.effective_company ?? selected.company ?? "暂无"}<small>{selected.user_company ? "用户维护" : "采集资料"}</small></dd></div><div><dt>角色</dt><dd>{selected.effective_role ?? selected.role ?? "暂无"}<small>{selected.user_role ? "用户维护" : "采集资料"}</small></dd></div></dl>{profileDraft && <form className="profile-editor" onSubmit={(event) => { event.preventDefault(); void saveProfile(profileDraft); }}><label>备注<input value={profileDraft.remark_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, remark_name: event.target.value })} maxLength={255} /></label><label>确认实名<input value={profileDraft.confirmed_real_name ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, confirmed_real_name: event.target.value })} maxLength={255} /></label><label>公司<input value={profileDraft.company ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, company: event.target.value })} maxLength={255} /></label><label>角色<input value={profileDraft.role ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} maxLength={255} /></label><footer><button type="button" className="link" onClick={() => setProfileDraft(null)}>取消</button><button className="primary" type="submit" disabled={profileSaving}>{profileSaving ? "保存中…" : "保存资料"}</button></footer></form>}{!profileDraft && <button className="link clear-profile" disabled={profileSaving || ![selected.user_remark_name, selected.user_confirmed_real_name, selected.user_company, selected.user_role].some(Boolean)} onClick={() => void saveProfile(emptyProfile())}>清除用户维护</button>}{profileHistoryOpen && <section className="profile-history"><h3>资料历史</h3>{profileHistoryLoading ? <p className="empty-message">正在读取资料历史…</p> : !profileHistory.length ? <p className="empty-message">当前联系人尚无资料操作历史。</p> : <div className="profile-history-list">{profileHistory.map((event) => <article key={event.id}><strong>{profileSnapshot(event)}</strong><time>{formatMessageTime(event.occurred_at)}</time><span>用户操作记录</span></article>)}</div>}</section>}</> : <p className="empty-message">选择联系人后可维护本地资料。</p>}</section>
           <section className="card confirmed"><header className="card-heading"><h2><CheckCircle weight="fill" />已确认的事实</h2><span><button className="link" disabled={!selected} onClick={() => setHistoryOpen((current) => !current)}>事实历史</button><button className="link" disabled={!selected} onClick={() => beginFact()}>添加事实</button></span></header><p>仅由用户手动记录或确认；系统不会从聊天自动推断事实。</p>{factDraft && <form className="fact-editor" onSubmit={(event) => { event.preventDefault(); void saveFact(); }}><label>类型<select value={factDraft.kind} onChange={(event) => setFactDraft({ ...factDraft, kind: event.target.value as FactKind })}>{Object.entries(factKindLabels).map(([kind, label]) => <option value={kind} key={kind}>{label}</option>)}</select></label><label>内容<textarea value={factDraft.content} onChange={(event) => setFactDraft({ ...factDraft, content: event.target.value })} placeholder="输入用户确认的内容" maxLength={2000} required /></label><fieldset><legend>原文证据（可选）</legend>{evidence.length ? evidence.map((message) => <label className="fact-evidence-choice" key={message.id}><input type="checkbox" checked={factDraft.message_ids.includes(message.id)} onChange={() => toggleFactEvidence(message.id)} />{message.conversation_name} · {formatMessageTime(message.sent_at)} · {message.text_content}</label>) : <p>无原文证据时将标记为“用户手动记录”。</p>}</fieldset><footer><button type="button" className="link" onClick={() => { setFactDraft(null); setEditingFactId(null); }}>取消</button><button className="primary" type="submit" disabled={factSaving || !factDraft.content.trim()}>{factSaving ? "保存中…" : editingFactId ? "保存修改" : "保存事实"}</button></footer></form>}{factsLoading ? <p className="empty-message">正在读取已确认事实…</p> : !facts.length ? <p className="empty-message">尚无已确认事实。可手动记录，或从聊天证据添加原文关联。</p> : <div className="fact-list">{facts.map((fact) => <article className="fact-row" key={fact.id}><div><strong>{factKindLabels[fact.kind]}</strong><time>更新于 {formatMessageTime(fact.updated_at)}</time></div><p>{fact.content}</p><footer>{fact.evidence.length ? <button className="link" onClick={() => showContext(fact.evidence[0])}>原文证据 {fact.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span><button className="link" onClick={() => editFact(fact)}>编辑</button><button className="link danger" onClick={() => void removeFact(fact.id)}>删除</button></span></footer></article>)}</div>}{historyOpen && <section className="fact-history"><h3>事实历史</h3>{historyLoading ? <p className="empty-message">正在读取事实历史…</p> : !factHistory.length ? <p className="empty-message">当前联系人尚无事实操作历史。</p> : <div className="fact-list">{factHistory.map((event) => <article className="fact-row history-row" key={event.id}><div><strong>{factHistoryLabels[event.event_type]} · {factKindLabels[event.kind]}</strong><time>{formatMessageTime(event.occurred_at)}</time></div><p>{event.content}</p><footer>{event.evidence.length ? <button className="link" onClick={() => showContext(event.evidence[0])}>原文证据 {event.evidence.length} 条</button> : <span className="manual-source">用户手动记录</span>}<span className="history-source">用户操作记录</span></footer></article>)}</div>}</section>}</section>

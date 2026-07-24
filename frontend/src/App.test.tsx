@@ -7,6 +7,8 @@ vi.mock("./api", async () => {
     ...actual,
     api: {
       sourceStatus: vi.fn(),
+      privacySettings: vi.fn(),
+      updatePrivacySettings: vi.fn(),
       contacts: vi.fn(),
       contactMessages: vi.fn(),
       facts: vi.fn(),
@@ -48,7 +50,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -75,7 +77,10 @@ function renderWithSource(source: SourceStatus, data: {
   timeline?: TimelineEvent[];
   tags?: Tag[];
   tagLinks?: TagLink[];
+  privacy?: PrivacySettings;
 } = {}) {
+  mockedApi.privacySettings.mockResolvedValue(data.privacy ?? { local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
+  mockedApi.updatePrivacySettings.mockResolvedValue({ local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
   mockedApi.sourceStatus.mockResolvedValue(source);
   mockedApi.contacts.mockResolvedValue(data.contacts ?? []);
   mockedApi.contactMessages.mockResolvedValue(data.evidence ?? []);
@@ -130,6 +135,25 @@ afterEach(() => {
 });
 
 describe("multi-account sync safety gate", () => {
+  it("requires local-boundary acknowledgement before probing a data source and keeps real collection disabled", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { privacy: { local_processing_acknowledged: false, real_collection_authorized: false, ai_processing_enabled: false, updated_at: null } });
+
+    expect(await screen.findByRole("heading", { name: "先确认数据处理边界" })).toBeInTheDocument();
+    expect(mockedApi.sourceStatus).not.toHaveBeenCalled();
+    const continueButton = screen.getByRole("button", { name: "继续以本地安全模式使用" });
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText(/我已了解本地处理边界/));
+    expect(continueButton).toBeEnabled();
+    fireEvent.click(continueButton);
+    await waitFor(() => expect(mockedApi.updatePrivacySettings).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(mockedApi.sourceStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(await screen.findByRole("heading", { name: "安全设置" })).toBeInTheDocument();
+    expect(screen.getByText("未获 Go/No-Go 授权")).toBeInTheDocument();
+    expect(screen.getByText("已关闭")).toBeInTheDocument();
+  });
+
   it("requires an explicit account before an account-selection sync", async () => {
     renderWithSource(sourceStatus({
       status: "account_selection_required",

@@ -591,6 +591,25 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
     assert other.json()["messages"] == 0
 
 
+def test_local_privacy_acknowledgement_is_persisted_without_authorizing_real_collection(client):
+    initial = client.get("/api/v1/settings/privacy")
+    assert initial.status_code == 200
+    assert initial.json() == {
+        "local_processing_acknowledged": False,
+        "real_collection_authorized": False,
+        "ai_processing_enabled": False,
+        "updated_at": None,
+    }
+
+    saved = client.patch("/api/v1/settings/privacy", json={"local_processing_acknowledged": True})
+    assert saved.status_code == 200
+    assert saved.json()["local_processing_acknowledged"] is True
+    assert saved.json()["real_collection_authorized"] is False
+    assert saved.json()["ai_processing_enabled"] is False
+    assert saved.json()["updated_at"]
+    assert client.get("/api/v1/settings/privacy").json()["local_processing_acknowledged"] is True
+
+
 def test_backup_manifest_and_two_step_account_deletion_are_local_and_explicit(client):
     client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
     contact = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()[0]
@@ -732,6 +751,6 @@ def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):
     command.upgrade(config, "head")
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert {"accounts", "facts", "knowledge_cards", "action_items", "tags", "account_deletion_requests"}.issubset(set(inspect(engine).get_table_names()))
+        assert {"accounts", "facts", "knowledge_cards", "action_items", "tags", "account_deletion_requests", "local_privacy_settings"}.issubset(set(inspect(engine).get_table_names()))
     finally:
         engine.dispose()

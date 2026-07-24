@@ -85,6 +85,7 @@ export type KnowledgeCardHistoryEvent = { id: string; account_id: string; card_i
 export type StorageStatus = { account_id: string; contacts: number; conversations: number; messages: number; facts: number; knowledge_cards: number; integrity_check: string };
 export type BackupManifest = { account_id: string; generated_at: string; integrity_check: string; counts: Record<string, number> };
 export type AccountDeletionRequest = { id: string; account_id: string; confirmation_phrase: string; expires_at: string };
+export type PrivacySettings = { local_processing_acknowledged: boolean; real_collection_authorized: boolean; ai_processing_enabled: boolean; updated_at?: string | null };
 export type ActionItem = { id: string; account_id: string; content: string; status: "open" | "done"; due_at?: string | null; created_at: string; updated_at: string; evidence: Message[] };
 export type ActionItemWrite = { content: string; status: "open" | "done"; due_at?: string | null; message_ids: string[] };
 export type ActionItemHistoryEvent = { id: string; account_id: string; action_item_id: string; event_type: "created" | "updated" | "deleted"; content: string; status: "open" | "done"; due_at?: string | null; occurred_at: string; evidence: Message[] };
@@ -109,6 +110,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   sourceStatus: () => request<SourceStatus>("/source/status"),
+  privacySettings: () => request<PrivacySettings>("/settings/privacy"),
+  updatePrivacySettings: (localProcessingAcknowledged: boolean) => request<PrivacySettings>("/settings/privacy", { method: "PATCH", body: JSON.stringify({ local_processing_acknowledged: localProcessingAcknowledged }) }),
   contacts: (accountId: string, query = "") => request<Contact[]>(`/contacts?account_id=${encodeURIComponent(accountId)}&query=${encodeURIComponent(query)}`),
   contactMessages: (contactId: string, accountId: string) => request<Message[]>(`/contacts/${encodeURIComponent(contactId)}/messages?account_id=${encodeURIComponent(accountId)}`),
   facts: (contactId: string, accountId: string) => request<Fact[]>(`/contacts/${encodeURIComponent(contactId)}/facts?account_id=${encodeURIComponent(accountId)}`),

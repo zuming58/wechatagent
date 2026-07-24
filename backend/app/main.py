@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
-from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun, Tag, TagLink
-from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
+from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, LocalPrivacySettings, Message, SyncRun, Tag, TagLink
+from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -293,6 +293,25 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/v1/settings/privacy", response_model=PrivacySettingsResponse)
+    def privacy_settings(db: Session = Depends(get_db)) -> PrivacySettingsResponse:
+        settings = db.get(LocalPrivacySettings, "local")
+        return PrivacySettingsResponse(
+            local_processing_acknowledged=bool(settings and settings.local_processing_acknowledged),
+            updated_at=settings.updated_at if settings else None,
+        )
+
+    @app.patch("/api/v1/settings/privacy", response_model=PrivacySettingsResponse)
+    def update_privacy_settings(request: PrivacySettingsWriteRequest, db: Session = Depends(get_db)) -> PrivacySettingsResponse:
+        settings = db.get(LocalPrivacySettings, "local")
+        if not settings:
+            settings = LocalPrivacySettings(id="local")
+            db.add(settings)
+        settings.local_processing_acknowledged = request.local_processing_acknowledged
+        db.commit()
+        db.refresh(settings)
+        return PrivacySettingsResponse(local_processing_acknowledged=settings.local_processing_acknowledged, updated_at=settings.updated_at)
 
     @app.get("/api/v1/source/status", response_model=SourceStatusResponse)
     def source_status() -> SourceStatusResponse:
