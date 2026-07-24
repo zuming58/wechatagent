@@ -31,12 +31,13 @@ vi.mock("./api", async () => {
       createActionItem: vi.fn(),
       updateActionItem: vi.fn(),
       deleteActionItem: vi.fn(),
+      actionItemHistory: vi.fn(),
     },
   };
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type SourceStatus } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -56,6 +57,8 @@ function renderWithSource(source: SourceStatus, data: {
   facts?: Fact[];
   history?: FactHistoryEvent[];
   profileHistory?: ContactProfileHistoryEvent[];
+  actionItems?: ActionItem[];
+  actionHistory?: ActionItemHistoryEvent[];
   search?: Message[];
   context?: MessageContext;
 } = {}) {
@@ -77,6 +80,11 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
   mockedApi.actionItems.mockResolvedValue([]);
+  mockedApi.createActionItem.mockImplementation(async (accountId, payload) => ({ id: "new-action", account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
+  mockedApi.updateActionItem.mockImplementation(async (itemId, accountId, payload) => ({ id: itemId, account_id: accountId, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:01:00Z", evidence: (data.evidence ?? []).filter((message) => payload.message_ids.includes(message.id)), ...payload }));
+  mockedApi.deleteActionItem.mockResolvedValue(undefined);
+  mockedApi.actionItems.mockResolvedValue(data.actionItems ?? []);
+  mockedApi.actionItemHistory.mockResolvedValue(data.actionHistory ?? []);
   return render(<App />);
 }
 
@@ -89,6 +97,7 @@ function syncButtons() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedApi.contacts.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -356,5 +365,29 @@ describe("multi-account sync safety gate", () => {
 
     await waitFor(() => expect(mockedApi.search).toHaveBeenCalledWith("account-b", "报价方案", { message_type: "file", contact_id: "contact-zhang", has_attachment: true }));
     expect(await screen.findByText(/报价方案.pdf.*application\/pdf.*1024 B/)).toBeInTheDocument();
+  });
+
+  it("creates a manual action item from source evidence and shows its local history", async () => {
+    const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
+    const evidence = { id: "action-message", conversation_id: "private-1", conversation_name: "Synthetic Contact", conversation_type: "private", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "Action source", snippet: "Action source" };
+    const item: ActionItem = { id: "action-1", account_id: "account-b", content: "Follow up", status: "open", due_at: null, created_at: "2026-07-23T12:00:00Z", updated_at: "2026-07-23T12:00:00Z", evidence: [evidence] };
+    const history: ActionItemHistoryEvent[] = [{ id: "action-history-1", account_id: "account-b", action_item_id: item.id, event_type: "deleted", content: "Follow up", status: "done", due_at: null, occurred_at: "2026-07-23T12:01:00Z", evidence: [evidence] }];
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { contacts: [contact], evidence: [evidence], actionItems: [item], actionHistory: history, context: { anchor_id: evidence.id, messages: [evidence] } });
+
+    await screen.findByRole("button", { name: /Synthetic Contact/ });
+    await waitFor(() => expect(mockedApi.contactMessages).toHaveBeenCalledWith("contact-zhang", "account-b"));
+    fireEvent.click((await screen.findAllByRole("button", { name: "待办事项" }))[0]);
+    fireEvent.click(screen.getByRole("button", { name: "添加待办" }));
+    fireEvent.change(screen.getByLabelText("内容"), { target: { value: "Evidence-backed follow up" } });
+    fireEvent.click(screen.getByLabelText(/Action source/));
+    fireEvent.click(screen.getByRole("button", { name: "保存待办" }));
+    await waitFor(() => expect(mockedApi.createActionItem).toHaveBeenCalledWith("account-b", { content: "Evidence-backed follow up", status: "open", due_at: null, message_ids: ["action-message"] }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "原文证据 1 条" })[0]);
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("action-message"));
+    fireEvent.click(screen.getAllByRole("button", { name: "历史" })[1]);
+    await waitFor(() => expect(mockedApi.actionItemHistory).toHaveBeenCalledWith("action-1", "account-b"));
+    expect(await screen.findByRole("heading", { name: "待办历史" })).toBeInTheDocument();
+    expect(screen.getByText("已删除 · 已完成")).toBeInTheDocument();
   });
 });

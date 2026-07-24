@@ -593,15 +593,25 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
 
 def test_user_action_items_are_account_isolated_and_manually_completed(client):
     client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
-    created = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "open"})
+    message = client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).json()[0]
+    created = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "open", "message_ids": [message["id"]]})
     assert created.status_code == 201
     item = created.json()
+    assert [evidence["id"] for evidence in item["evidence"]] == [message["id"]]
     assert client.get("/api/v1/action-items", params={"account_id": "dev-account", "status": "open"}).json()[0]["id"] == item["id"]
-    completed = client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "done"})
+    completed = client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}, json={"content": "Follow up manually", "status": "done", "message_ids": [message["id"]]})
     assert completed.status_code == 200
     assert completed.json()["status"] == "done"
-    assert client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "other-account"}, json={"content": "No", "status": "done"}).status_code == 404
+    assert client.patch(f"/api/v1/action-items/{item['id']}", params={"account_id": "other-account"}, json={"content": "No", "status": "done", "message_ids": []}).status_code == 404
+    invalid = client.post("/api/v1/action-items", params={"account_id": "dev-account"}, json={"content": "Must not persist", "status": "open", "message_ids": ["other-account-message"]})
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"] == "action_item_evidence_message_not_found"
     assert client.delete(f"/api/v1/action-items/{item['id']}", params={"account_id": "dev-account"}).status_code == 204
+    assert client.get("/api/v1/action-items", params={"account_id": "dev-account"}).json() == []
+    history = client.get(f"/api/v1/action-items/{item['id']}/history", params={"account_id": "dev-account"})
+    assert [event["event_type"] for event in history.json()] == ["deleted", "updated", "created"]
+    assert all([event["evidence"][0]["id"] for event in history.json()])
+    assert client.get(f"/api/v1/action-items/{item['id']}/history", params={"account_id": "other-account"}).status_code == 404
 
 
 def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):

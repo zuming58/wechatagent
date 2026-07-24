@@ -237,6 +237,44 @@ class ActionItem(Base):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    evidence: Mapped[list["ActionItemEvidence"]] = relationship(back_populates="item", cascade="all, delete-orphan")
+
+
+class ActionItemEvidence(Base):
+    __tablename__ = "action_item_evidence"
+    __table_args__ = (UniqueConstraint("action_item_id", "message_id", name="uq_action_item_evidence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    action_item_id: Mapped[str] = mapped_column(ForeignKey("action_items.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    item: Mapped[ActionItem] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
+
+
+class ActionItemHistoryEvent(Base):
+    __tablename__ = "action_item_history_events"
+    __table_args__ = (Index("ix_action_item_history_account_item", "account_id", "action_item_id", "occurred_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    action_item_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    evidence: Mapped[list["ActionItemHistoryEvidence"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+
+
+class ActionItemHistoryEvidence(Base):
+    __tablename__ = "action_item_history_evidence"
+    __table_args__ = (UniqueConstraint("event_id", "message_id", name="uq_action_item_history_evidence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("action_item_history_events.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    event: Mapped[ActionItemHistoryEvent] = relationship(back_populates="evidence")
+    message: Mapped[Message] = relationship()
 
 
 class SyncShard(Base):

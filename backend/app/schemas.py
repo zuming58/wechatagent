@@ -60,6 +60,7 @@ class ActionItemWriteRequest(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
     status: str = Field(default="open", pattern="^(open|done)$")
     due_at: datetime | None = None
+    message_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ActionItemResponse(BaseModel):
@@ -70,6 +71,19 @@ class ActionItemResponse(BaseModel):
     due_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    evidence: list["MessageSearchItem"]
+
+
+class ActionItemHistoryResponse(BaseModel):
+    id: str
+    account_id: str
+    action_item_id: str
+    event_type: str
+    content: str
+    status: str
+    due_at: datetime | None
+    occurred_at: datetime
+    evidence: list["MessageSearchItem"]
 
 
 class ContactResponse(BaseModel):
