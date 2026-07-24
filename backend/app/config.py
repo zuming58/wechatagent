@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     wx_command: str = "wx"
     selected_account_id: str | None = None
     sync_overlap_seconds: int = 300
+    auto_sync_enabled: bool = True
+    auto_sync_interval_seconds: int = 300
     allowed_origin: str = "http://127.0.0.1:5173"
 
     def ensure_data_directory(self) -> None:

@@ -5,13 +5,14 @@ from datetime import date, datetime, time, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, or_, select, text
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
 from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, Message, SyncRun
-from .schemas import AccountSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse
+from .schemas import AccountSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
 
@@ -168,7 +169,23 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         app_engine = build_engine(current_settings.database_url)
         initialize_database(app_engine)
         _app.state.database_engine = app_engine
+        session_factory = sessionmaker(bind=app_engine, autoflush=False, expire_on_commit=False)
+        coordinator = SyncCoordinator()
+        # The real connector remains an explicit Go/No-Go operation.  Automatic
+        # work is available only for the deterministic synthetic connector.
+        scheduler = AutomaticSyncScheduler(
+            current_connector,
+            session_factory,
+            coordinator,
+            current_settings.sync_overlap_seconds,
+            current_settings.auto_sync_interval_seconds,
+            current_settings.auto_sync_enabled and current_settings.connector == "synthetic",
+        )
+        _app.state.sync_coordinator = coordinator
+        _app.state.sync_scheduler = scheduler
+        scheduler.start()
         yield
+        scheduler.stop()
         app_engine.dispose()
 
     app = FastAPI(title=current_settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -214,8 +231,17 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
                     "reason": "Select one of the accounts currently detected on this device.",
                 },
             )
-        service = SyncService(app.state.connector, app.state.settings.sync_overlap_seconds)
-        return service.run(db, request.account_id, request.mode, request.limit_sessions)
+        lock = app.state.sync_coordinator.try_acquire(request.account_id)
+        if not lock:
+            raise HTTPException(
+                status_code=409,
+                detail={"status": "failed", "error_code": "sync_in_progress", "reason": "A sync is already running for this account."},
+            )
+        try:
+            service = SyncService(app.state.connector, app.state.settings.sync_overlap_seconds)
+            return service.run(db, request.account_id, request.mode, request.limit_sessions)
+        finally:
+            lock.release()
 
     @app.get("/api/v1/sync/runs/{run_id}", response_model=SyncRunResponse)
     def get_sync_run(run_id: str, db: Session = Depends(get_db)) -> SyncRun:
@@ -223,6 +249,33 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         if not run:
             raise HTTPException(status_code=404, detail="sync_run_not_found")
         return run
+
+    @app.get("/api/v1/sync/runs", response_model=list[SyncRunResponse])
+    def list_sync_runs(
+        account_id: str,
+        limit: int = Query(20, ge=1, le=100),
+        db: Session = Depends(get_db),
+    ) -> list[SyncRun]:
+        return db.scalars(
+            select(SyncRun)
+            .where(SyncRun.account_id == account_id)
+            .order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+            .limit(limit)
+        ).all()
+
+    @app.get("/api/v1/sync/schedule", response_model=SyncScheduleResponse)
+    def sync_schedule() -> SyncScheduleResponse:
+        scheduler = app.state.sync_scheduler
+        reason = None
+        if not scheduler.enabled:
+            reason = "Automatic sync is restricted to the synthetic connector until real collection receives Go/No-Go authorization."
+        return SyncScheduleResponse(
+            enabled=scheduler.enabled,
+            interval_seconds=scheduler.interval_seconds,
+            reason=reason,
+            last_cycle_at=scheduler.last_cycle_at,
+            next_run_at=scheduler.next_run_at,
+        )
 
     @app.get("/api/v1/contacts", response_model=list[ContactResponse])
     def list_contacts(account_id: str, query: str | None = None, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)) -> list[ContactResponse]:

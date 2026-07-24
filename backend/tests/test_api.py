@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
+from app.config import Settings
 from app.connectors.base import Connector, ConnectorBatch, SourceAccount, SourceProbe, StandardContact, StandardConversation, StandardMessage
 from app.connectors.synthetic import SyntheticConnector
+from app.main import create_app
 from app.models import Contact, Message, SyncShard
 
 
@@ -73,6 +76,20 @@ class AccountSelectionConnector(Connector):
             watermark_by_shard={},
             latest_by_shard={},
         )
+
+
+class NeverProbeConnector(Connector):
+    def __init__(self):
+        self.probe_calls = 0
+        self.collect_calls = 0
+
+    def probe(self):
+        self.probe_calls += 1
+        raise AssertionError("The real-connector scheduler must not probe")
+
+    def collect(self, account_id, since, limit_sessions=None):
+        self.collect_calls += 1
+        raise AssertionError("The real-connector scheduler must not collect")
 
 
 def database_session(client):
@@ -461,3 +478,41 @@ def test_user_contact_profile_overrides_are_traceable_and_survive_sync(client):
     assert refreshed_zhang["display_name"] == "User Remark"
     assert refreshed_zhang["user_role"] == "User Role"
     assert len(client.get(f"/api/v1/contacts/{zhang['id']}/profile-history", params={"account_id": "dev-account"}).json()) == 2
+
+
+def test_synthetic_scheduler_requires_first_archive_and_records_incremental_runs(client):
+    scheduler = client.app.state.sync_scheduler
+    assert scheduler.enabled is True
+    assert scheduler.run_cycle() == []
+
+    first = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    assert first.status_code == 200
+    scheduled = scheduler.run_cycle()
+
+    assert len(scheduled) == 1
+    assert scheduled[0].mode == "incremental"
+    assert scheduled[0].status == "completed"
+    assert scheduled[0].inserted_count == 0
+    assert scheduled[0].duplicate_count == 1
+
+    runs = client.get("/api/v1/sync/runs", params={"account_id": "dev-account"})
+    assert runs.status_code == 200
+    assert [item["mode"] for item in runs.json()] == ["incremental", "initial"]
+
+    schedule = client.get("/api/v1/sync/schedule")
+    assert schedule.status_code == 200
+    assert schedule.json()["enabled"] is True
+    assert schedule.json()["last_cycle_at"] is not None
+    assert schedule.json()["next_run_at"] is not None
+
+
+def test_non_synthetic_mode_never_starts_the_automatic_scheduler(tmp_path):
+    connector = NeverProbeConnector()
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'scheduler-disabled.db'}", connector="wxcli", auto_sync_enabled=True)
+    with TestClient(create_app(settings=settings, connector=connector)) as client:
+        response = client.get("/api/v1/sync/schedule")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert connector.probe_calls == 0
+    assert connector.collect_calls == 0

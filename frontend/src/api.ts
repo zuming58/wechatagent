@@ -28,6 +28,13 @@ export type Contact = {
 export type Message = { id: string; conversation_id: string; conversation_name: string; conversation_type: string; sender_display_name: string; sent_at: string; message_type: string; text_content: string; snippet: string };
 export type MessageContext = { anchor_id: string; messages: Message[] };
 export type SyncRun = { id: string; status: string; inserted_count: number; duplicate_count: number; error_code?: string | null };
+export type SyncSchedule = {
+  enabled: boolean;
+  interval_seconds: number;
+  reason?: string | null;
+  last_cycle_at?: string | null;
+  next_run_at?: string | null;
+};
 export type FactKind = "company" | "role" | "need" | "concern" | "commitment";
 export type Fact = {
   id: string;
@@ -95,4 +102,6 @@ export const api = {
   search: (accountId: string, query: string) => request<Message[]>(`/messages/search?account_id=${encodeURIComponent(accountId)}&q=${encodeURIComponent(query)}`),
   messageContext: (messageId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context`),
   sync: (accountId: string, mode: "initial" | "incremental" = "incremental") => request<SyncRun>("/sync", { method: "POST", body: JSON.stringify({ account_id: accountId, mode }) }),
+  syncRuns: (accountId: string) => request<SyncRun[]>(`/sync/runs?account_id=${encodeURIComponent(accountId)}`),
+  syncSchedule: () => request<SyncSchedule>("/sync/schedule"),
 };

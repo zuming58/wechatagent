@@ -38,6 +38,14 @@ class SyncRunResponse(BaseModel):
     completed_at: datetime | None
 
 
+class SyncScheduleResponse(BaseModel):
+    enabled: bool
+    interval_seconds: int
+    reason: str | None = None
+    last_cycle_at: datetime | None = None
+    next_run_at: datetime | None = None
+
+
 class ContactResponse(BaseModel):
     id: str
     source_id: str

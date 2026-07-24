@@ -19,6 +19,8 @@ vi.mock("./api", async () => {
       search: vi.fn(),
       messageContext: vi.fn(),
       sync: vi.fn(),
+      syncRuns: vi.fn(),
+      syncSchedule: vi.fn(),
     },
   };
 });
@@ -60,6 +62,8 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.search.mockResolvedValue(data.search ?? []);
   mockedApi.messageContext.mockResolvedValue(data.context ?? { anchor_id: "synthetic-message", messages: [] });
   mockedApi.sync.mockResolvedValue({ id: "synthetic-run", status: "completed", inserted_count: 0, duplicate_count: 0 });
+  mockedApi.syncRuns.mockResolvedValue([]);
+  mockedApi.syncSchedule.mockResolvedValue({ enabled: true, interval_seconds: 300 });
   return render(<App />);
 }
 
