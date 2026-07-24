@@ -19,7 +19,11 @@ def client() -> Generator[TestClient, None, None]:
         engine = build_engine(f"sqlite:///{database_path}")
         initialize_database(engine)
         TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-        settings = Settings(database_url=f"sqlite:///{database_path}", connector="synthetic")
+        settings = Settings(
+            database_url=f"sqlite:///{database_path}",
+            connector="synthetic",
+            allowed_origin="http://127.0.0.1:5173",
+        )
         app = create_app(settings=settings, connector=SyntheticConnector())
         app.state.testing_session_factory = TestingSession
 

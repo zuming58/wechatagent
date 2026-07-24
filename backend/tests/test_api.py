@@ -157,10 +157,46 @@ def test_idempotent_import_and_search_context(client):
     assert "离线部署" in search.json()[0]["text_content"]
 
     message_id = search.json()[0]["id"]
-    context = client.get(f"/api/v1/messages/{message_id}/context", params={"radius": 2})
+    context = client.get(f"/api/v1/messages/{message_id}/context", params={"account_id": "dev-account", "radius": 2})
     assert context.status_code == 200
     assert context.json()["anchor_id"] == message_id
     assert len(context.json()["messages"]) >= 2
+
+
+def test_browser_cors_allows_local_write_methods(client):
+    headers = {
+        "Origin": "http://127.0.0.1:5173",
+        "Access-Control-Request-Method": "PATCH",
+        "Access-Control-Request-Headers": "content-type",
+    }
+
+    patch_preflight = client.options("/api/v1/settings/privacy", headers=headers)
+    assert patch_preflight.status_code == 200
+    assert "PATCH" in patch_preflight.headers["access-control-allow-methods"]
+
+    delete_preflight = client.options(
+        "/api/v1/facts/example",
+        headers={**headers, "Access-Control-Request-Method": "DELETE"},
+    )
+    assert delete_preflight.status_code == 200
+    assert "DELETE" in delete_preflight.headers["access-control-allow-methods"]
+
+
+def test_single_resource_reads_require_the_matching_account(client):
+    sync = client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"}).json()
+    contact = client.get("/api/v1/contacts", params={"account_id": "dev-account"}).json()[0]
+    message = client.get(
+        f"/api/v1/contacts/{contact['id']}/messages",
+        params={"account_id": "dev-account"},
+    ).json()[0]
+
+    assert client.get(f"/api/v1/sync/runs/{sync['id']}", params={"account_id": "dev-account"}).status_code == 200
+    assert client.get(f"/api/v1/contacts/{contact['id']}", params={"account_id": "dev-account"}).status_code == 200
+    assert client.get(f"/api/v1/messages/{message['id']}/context", params={"account_id": "dev-account"}).status_code == 200
+
+    assert client.get(f"/api/v1/sync/runs/{sync['id']}", params={"account_id": "another-account"}).status_code == 404
+    assert client.get(f"/api/v1/contacts/{contact['id']}", params={"account_id": "another-account"}).status_code == 404
+    assert client.get(f"/api/v1/messages/{message['id']}/context", params={"account_id": "another-account"}).status_code == 404
 
 
 def test_contact_search_and_account_isolation(client):

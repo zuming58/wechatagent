@@ -289,7 +289,15 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
     app = FastAPI(title=current_settings.app_name, version="0.1.0", lifespan=lifespan)
     app.state.connector = current_connector
     app.state.settings = current_settings
-    app.add_middleware(CORSMiddleware, allow_origins=[current_settings.allowed_origin], allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["*"])
+    # Keep browser access local and explicit while allowing every method used by
+    # the workbench's local editing and deletion flows.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=sorted({current_settings.allowed_origin, "http://127.0.0.1:5173"}),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
@@ -361,8 +369,8 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             lock.release()
 
     @app.get("/api/v1/sync/runs/{run_id}", response_model=SyncRunResponse)
-    def get_sync_run(run_id: str, db: Session = Depends(get_db)) -> SyncRun:
-        run = db.get(SyncRun, run_id)
+    def get_sync_run(run_id: str, account_id: str, db: Session = Depends(get_db)) -> SyncRun:
+        run = db.scalar(select(SyncRun).where(SyncRun.id == run_id, SyncRun.account_id == account_id))
         if not run:
             raise HTTPException(status_code=404, detail="sync_run_not_found")
         return run
@@ -502,11 +510,8 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         return [contact_response(contact) for contact in db.scalars(statement)]
 
     @app.get("/api/v1/contacts/{contact_id}", response_model=ContactResponse)
-    def get_contact(contact_id: str, db: Session = Depends(get_db)) -> ContactResponse:
-        contact = db.get(Contact, contact_id)
-        if not contact:
-            raise HTTPException(status_code=404, detail="contact_not_found")
-        return contact_response(contact)
+    def get_contact(contact_id: str, account_id: str, db: Session = Depends(get_db)) -> ContactResponse:
+        return contact_response(account_contact_or_404(db, contact_id, account_id))
 
     @app.patch("/api/v1/contacts/{contact_id}/profile", response_model=ContactResponse)
     def update_contact_profile(contact_id: str, request: ContactProfileWriteRequest, account_id: str, db: Session = Depends(get_db)) -> ContactResponse:
@@ -966,8 +971,8 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
         return [MessageSearchItem(id=row["id"], conversation_id=row["conversation_id"], conversation_name=row["display_name"], conversation_type=row["conversation_type"], sender_display_name=row["sender_display_name"], sent_at=row["sent_at"], message_type=row["message_type"], text_content=row["text_content"], snippet=row["hit_snippet"], attachments=attachment_summaries(row["attachment_metadata"])) for row in rows]
 
     @app.get("/api/v1/messages/{message_id}/context", response_model=MessageContextResponse)
-    def message_context(message_id: str, radius: int = Query(3, ge=1, le=20), db: Session = Depends(get_db)) -> MessageContextResponse:
-        anchor = db.get(Message, message_id)
+    def message_context(message_id: str, account_id: str, radius: int = Query(3, ge=1, le=20), db: Session = Depends(get_db)) -> MessageContextResponse:
+        anchor = db.scalar(select(Message).where(Message.id == message_id, Message.account_id == account_id))
         if not anchor:
             raise HTTPException(status_code=404, detail="message_not_found")
         before = list(db.scalars(select(Message).where(Message.conversation_id == anchor.conversation_id, Message.sent_at <= anchor.sent_at).order_by(Message.sent_at.desc()).limit(radius + 1)))

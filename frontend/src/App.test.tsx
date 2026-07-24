@@ -274,7 +274,7 @@ describe("multi-account sync safety gate", () => {
     expect(screen.getByText(/张工.*群聊.*text/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("message-group"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("message-group", "account-b"));
     expect(await screen.findByText("消息上下文")).toBeInTheDocument();
   });
 
@@ -303,7 +303,7 @@ describe("multi-account sync safety gate", () => {
 
     expect(await screen.findByText("离线部署的原文结果")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("search-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("search-message", "account-b"));
     expect(await screen.findByText("消息上下文")).toBeInTheDocument();
   });
 
@@ -333,7 +333,7 @@ describe("multi-account sync safety gate", () => {
 
     await waitFor(() => expect(mockedApi.createFact).toHaveBeenCalledWith("contact-zhang", "account-b", { kind: "company", content: "Confirmed with evidence", message_ids: ["evidence-message"] }));
     fireEvent.click(await screen.findByRole("button", { name: "原文证据 1 条" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("evidence-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("evidence-message", "account-b"));
   });
 
   it("edits, deletes, and clears an unfinished fact when the contact changes", async () => {
@@ -371,7 +371,7 @@ describe("multi-account sync safety gate", () => {
     expect(screen.getByText("Deleted local fact")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "原文证据 1 条" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("history-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("history-message", "account-b"));
     fireEvent.click(screen.getByRole("button", { name: /Second Contact/ }));
     expect(screen.queryByRole("heading", { name: "事实历史" })).not.toBeInTheDocument();
   });
@@ -438,7 +438,7 @@ describe("multi-account sync safety gate", () => {
     await waitFor(() => expect(mockedApi.createActionItem).toHaveBeenCalledWith("account-b", { content: "Evidence-backed follow up", status: "open", due_at: null, message_ids: ["action-message"] }));
 
     fireEvent.click(screen.getAllByRole("button", { name: "原文证据 1 条" })[0]);
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("action-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("action-message", "account-b"));
     fireEvent.click(screen.getAllByRole("button", { name: "历史" })[1]);
     await waitFor(() => expect(mockedApi.actionItemHistory).toHaveBeenCalledWith("action-1", "account-b"));
     expect(await screen.findByRole("heading", { name: "待办历史" })).toBeInTheDocument();
@@ -467,7 +467,7 @@ describe("multi-account sync safety gate", () => {
     expect(await screen.findByRole("button", { name: "用于新事实" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("global-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("global-message", "account-b"));
     expect(await screen.findByRole("heading", { name: "消息上下文" })).toBeInTheDocument();
   });
 
@@ -484,7 +484,7 @@ describe("multi-account sync safety gate", () => {
     expect(screen.getByText("User-confirmed requirement")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看上下文" }));
-    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("timeline-message"));
+    await waitFor(() => expect(mockedApi.messageContext).toHaveBeenCalledWith("timeline-message", "account-b"));
     fireEvent.click(screen.getByLabelText("当前联系人"));
     await waitFor(() => expect(mockedApi.timeline).toHaveBeenLastCalledWith("account-b", { kinds: ["message", "fact", "profile", "knowledge_card", "action_item"], contact_id: "contact-zhang" }));
   });

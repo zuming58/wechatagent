@@ -313,8 +313,9 @@ export function App() {
   }
 
   async function showContext(message: Message) {
+    if (!accountId) return;
     setContextLoading(true);
-    try { setContext(await api.messageContext(message.id)); }
+    try { setContext(await api.messageContext(message.id, accountId)); }
     catch { setNotice("消息上下文读取失败。"); }
     finally { setContextLoading(false); }
   }

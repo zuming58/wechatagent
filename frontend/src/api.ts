@@ -159,7 +159,7 @@ export const api = {
     for (const [key, value] of Object.entries(filters ?? {})) if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));
     return request<Message[]>(`/messages/search?${params.toString()}`);
   },
-  messageContext: (messageId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context`),
+  messageContext: (messageId: string, accountId: string) => request<MessageContext>(`/messages/${encodeURIComponent(messageId)}/context?account_id=${encodeURIComponent(accountId)}`),
   sync: (accountId: string, mode: "initial" | "incremental" = "incremental") => request<SyncRun>("/sync", { method: "POST", body: JSON.stringify({ account_id: accountId, mode }) }),
   syncRuns: (accountId: string) => request<SyncRun[]>(`/sync/runs?account_id=${encodeURIComponent(accountId)}`),
   syncSchedule: () => request<SyncSchedule>("/sync/schedule"),
