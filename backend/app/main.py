@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
 from .database import build_engine, get_db, initialize_database
 from .models import Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, Message, SyncRun
-from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
+from .schemas import AccountSummary, AttachmentSummary, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
 from .services.sync import SyncService
 
@@ -322,6 +322,19 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
             reason=reason,
             last_cycle_at=scheduler.last_cycle_at,
             next_run_at=scheduler.next_run_at,
+        )
+
+    @app.get("/api/v1/storage/status", response_model=StorageStatusResponse)
+    def storage_status(account_id: str, db: Session = Depends(get_db)) -> StorageStatusResponse:
+        integrity = db.execute(text("PRAGMA integrity_check")).scalar() or "unknown"
+        return StorageStatusResponse(
+            account_id=account_id,
+            contacts=db.scalar(select(func.count(Contact.id)).where(Contact.account_id == account_id)) or 0,
+            conversations=db.scalar(select(func.count(Conversation.id)).where(Conversation.account_id == account_id)) or 0,
+            messages=db.scalar(select(func.count(Message.id)).where(Message.account_id == account_id)) or 0,
+            facts=db.scalar(select(func.count(Fact.id)).where(Fact.account_id == account_id)) or 0,
+            knowledge_cards=db.scalar(select(func.count(KnowledgeCard.id)).where(KnowledgeCard.account_id == account_id)) or 0,
+            integrity_check=str(integrity),
         )
 
     @app.get("/api/v1/contacts", response_model=list[ContactResponse])

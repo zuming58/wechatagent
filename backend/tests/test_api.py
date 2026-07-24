@@ -578,3 +578,12 @@ def test_user_managed_knowledge_cards_keep_account_isolated_evidence_history(cli
     assert client.get("/api/v1/knowledge-cards", params={"account_id": "dev-account"}).json() == []
     history = client.get(f"/api/v1/knowledge-cards/{card['id']}/history", params={"account_id": "dev-account"})
     assert [item["event_type"] for item in history.json()] == ["deleted", "updated", "created"]
+
+
+def test_storage_status_reports_only_requested_account_and_integrity(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    status = client.get("/api/v1/storage/status", params={"account_id": "dev-account"})
+    assert status.status_code == 200
+    assert status.json() == {"account_id": "dev-account", "contacts": 3, "conversations": 3, "messages": 5, "facts": 0, "knowledge_cards": 0, "integrity_check": "ok"}
+    other = client.get("/api/v1/storage/status", params={"account_id": "other-account"})
+    assert other.json()["messages"] == 0

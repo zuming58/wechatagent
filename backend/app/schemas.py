@@ -46,6 +46,16 @@ class SyncScheduleResponse(BaseModel):
     next_run_at: datetime | None = None
 
 
+class StorageStatusResponse(BaseModel):
+    account_id: str
+    contacts: int
+    conversations: int
+    messages: int
+    facts: int
+    knowledge_cards: int
+    integrity_check: str
+
+
 class ContactResponse(BaseModel):
     id: str
     source_id: str

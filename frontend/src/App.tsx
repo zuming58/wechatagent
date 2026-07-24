@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type SyncRun, type SyncSchedule } from "./api";
+import { api, LocalApiError, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule } from "./api";
 
 const nav = ["关系记忆", "待办事项", "全局搜索", "时间线", "标签管理"];
 const factKindLabels: Record<FactKind, string> = {
@@ -74,6 +74,7 @@ export function App() {
   const [editingKnowledgeCardId, setEditingKnowledgeCardId] = useState<string | null>(null);
   const [knowledgeHistory, setKnowledgeHistory] = useState<KnowledgeCardHistoryEvent[]>([]);
   const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence">("overview");
   const [loading, setLoading] = useState(true);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -133,6 +134,11 @@ export function App() {
     let active = true;
     Promise.resolve(api.syncRuns(accountId)).then((items) => active && setSyncRuns(items ?? [])).catch(() => active && setNotice("同步记录读取失败。"));
     return () => { active = false; };
+  }, [accountId]);
+
+  useEffect(() => {
+    if (!accountId) { setStorage(null); return; }
+    Promise.resolve(api.storageStatus(accountId)).then((value) => value && setStorage(value)).catch(() => setNotice("存储状态读取失败。"));
   }, [accountId]);
 
   useEffect(() => {
@@ -386,7 +392,7 @@ export function App() {
         </>}
         {activeTab === "evidence" && <section className="card evidence-card"><h2><ChatCircleDots weight="fill" />{selected ? `${selected.display_name} 的聊天证据` : "聊天证据"}</h2><p>包含与该联系人的私聊，以及该联系人在已归档群聊中的发言。</p><div className="evidence-list">{evidenceLoading ? <p className="empty-message">正在读取聊天证据…</p> : messageRows(evidence, "当前联系人尚无可追溯聊天证据。", true)}</div></section>}
         {context && <section className="card context-card"><h2>消息上下文</h2><div className="context-list">{context.messages.map((item) => <article className={item.id === context.anchor_id ? "context-message anchor" : "context-message"} key={item.id}><strong>{item.sender_display_name} · {formatMessageTime(item.sent_at)}</strong><p>{item.text_content}</p></article>)}</div></section>}
-        <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}{schedule && <div className="schedule-state"><strong>{schedule.enabled ? `自动增量同步已启用（每 ${Math.round(schedule.interval_seconds / 60)} 分钟）` : "自动增量同步未启用"}</strong><span>{schedule.enabled ? "仅对已首次归档的合成账号生效。" : schedule.reason}</span></div>}{syncRuns.length > 0 && <div className="recent-sync"><strong>最近同步</strong>{syncRuns.slice(0, 3).map((run) => <span key={run.id}>{syncRunSummary(run)}</span>)}</div>}<p>{contextLoading ? "正在读取消息上下文…" : notice || "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
+        <section className="card needs"><h2>同步状态与下一步</h2>{source && (accountSelectionRequired || source.accounts.length > 1) && <label className="account-picker">{accountSelectionRequired ? "请选择本地账号" : "当前本地账号"}<select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="" disabled>请选择一个已探测账号</option>{source.accounts.map((account) => <option value={account.id} key={account.id}>{account.display_name}</option>)}</select></label>}{schedule && <div className="schedule-state"><strong>{schedule.enabled ? `自动增量同步已启用（每 ${Math.round(schedule.interval_seconds / 60)} 分钟）` : "自动增量同步未启用"}</strong><span>{schedule.enabled ? "仅对已首次归档的合成账号生效。" : schedule.reason}</span></div>}{storage && <div className="recent-sync"><strong>本地存储 · {storage.integrity_check === "ok" ? "完整性正常" : storage.integrity_check}</strong><span>消息 {storage.messages} · 联系人 {storage.contacts} · 事实 {storage.facts} · 知识卡 {storage.knowledge_cards}</span></div>}{syncRuns.length > 0 && <div className="recent-sync"><strong>最近同步</strong>{syncRuns.slice(0, 3).map((run) => <span key={run.id}>{syncRunSummary(run)}</span>)}</div>}<p>{contextLoading ? "正在读取消息上下文…" : notice || "查看聊天证据可核对联系人消息来源与前后文。真实微信连接仍需通过只读 Go/No-Go。"}</p></section>
       </div>
     </main>
   </div>;
