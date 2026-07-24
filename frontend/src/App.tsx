@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, ChatCircleDots, CheckCircle, CircleNotch, CloudCheck, Database, LinkSimple, MagnifyingGlass, UsersThree, WarningCircle } from "@phosphor-icons/react";
-import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type PrivacySettings, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
+import { api, LocalApiError, type AccountDeletionRequest, type ActionItem, type ActionItemHistoryEvent, type ActionItemWrite, type BackupManifest, type Contact, type ContactProfileHistoryEvent, type ContactProfileWrite, type Fact, type FactHistoryEvent, type FactKind, type FactWrite, type FtsIndexStatus, type KnowledgeCard, type KnowledgeCardHistoryEvent, type KnowledgeCardType, type KnowledgeCardWrite, type Message, type MessageContext, type MessageSearchFilters, type PrivacySettings, type SourceStatus, type StorageStatus, type SyncRun, type SyncSchedule, type Tag, type TagLink, type TagTargetType, type TagWrite, type TimelineEvent, type TimelineKind } from "./api";
 import "./data-management.css";
 import "./privacy.css";
 
@@ -90,6 +90,8 @@ export function App() {
   const [knowledgeHistoryCardId, setKnowledgeHistoryCardId] = useState<string | null>(null);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [backupManifest, setBackupManifest] = useState<BackupManifest | null>(null);
+  const [ftsIndexStatus, setFtsIndexStatus] = useState<FtsIndexStatus | null>(null);
+  const [ftsRebuilding, setFtsRebuilding] = useState(false);
   const [deletionRequest, setDeletionRequest] = useState<AccountDeletionRequest | null>(null);
   const [deletionConfirmation, setDeletionConfirmation] = useState("");
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
@@ -193,8 +195,9 @@ export function App() {
   }, [accountId]);
 
   useEffect(() => {
-    if (!accountId) { setStorage(null); setBackupManifest(null); setDeletionRequest(null); setDeletionConfirmation(""); return; }
+    if (!accountId) { setStorage(null); setBackupManifest(null); setFtsIndexStatus(null); setDeletionRequest(null); setDeletionConfirmation(""); return; }
     Promise.resolve(api.storageStatus(accountId)).then((value) => value && setStorage(value)).catch(() => setNotice("存储状态读取失败。"));
+    Promise.resolve(api.ftsIndexStatus(accountId)).then((value) => value && setFtsIndexStatus(value)).catch(() => setNotice("全文索引状态读取失败。"));
   }, [accountId]);
 
   useEffect(() => {
@@ -463,6 +466,20 @@ export function App() {
     } catch { setNotice("备份前清单读取失败。 "); }
   }
 
+  async function rebuildFtsIndex() {
+    if (!accountId) return;
+    setFtsRebuilding(true);
+    try {
+      const rebuilt = await api.rebuildFtsIndex(accountId);
+      setFtsIndexStatus(rebuilt);
+      setNotice(`全文索引已重建：${rebuilt.indexed_message_count} 条本地消息已索引，原始消息未被修改。`);
+    } catch (error) {
+      setNotice(error instanceof LocalApiError ? `全文索引未重建（${error.status} · ${error.errorCode ?? "unknown"}）：${error.reason ?? "请稍后重试。"}` : "全文索引未重建。");
+    } finally {
+      setFtsRebuilding(false);
+    }
+  }
+
   async function requestAccountDeletion() {
     if (!accountId) return;
     try {
@@ -614,9 +631,11 @@ export function App() {
     {!accountId ? <p>请选择本地账号后查看清单或准备删除。</p> : <>
       <div className="data-management-actions">
         <button type="button" className="secondary" onClick={() => void loadBackupManifest()}>生成备份前清单</button>
+        <button type="button" className="secondary" disabled={ftsRebuilding} onClick={() => void rebuildFtsIndex()}>{ftsRebuilding ? "正在重建全文索引…" : "重建全文索引"}</button>
         <button type="button" className="link danger" onClick={() => void requestAccountDeletion()}>准备删除当前账号数据</button>
       </div>
       {backupManifest && <p className="backup-manifest">清单生成于 {formatMessageTime(backupManifest.generated_at)}：完整性 {backupManifest.integrity_check === "ok" ? "正常" : backupManifest.integrity_check}；消息 {backupManifest.counts.messages ?? 0}，联系人 {backupManifest.counts.contacts ?? 0}，事实 {backupManifest.counts.facts ?? 0}，知识卡 {backupManifest.counts.knowledge_cards ?? 0}，待办 {backupManifest.counts.action_items ?? 0}，标签 {backupManifest.counts.tags ?? 0}。</p>}
+      {ftsIndexStatus && <p className={ftsIndexStatus.status === "ready" ? "index-status" : "index-status warning"}>全文索引：{ftsIndexStatus.status === "ready" ? "正常" : ftsIndexStatus.status === "needs_rebuild" ? "需要重建" : "不可用"}；原始消息 {ftsIndexStatus.message_count}，已索引 {ftsIndexStatus.indexed_message_count}。</p>}
       {deletionRequest && <div className="deletion-confirmation">
         <p>删除请求将在 {formatMessageTime(deletionRequest.expires_at)} 失效。此操作只删除当前账号的本地归档和用户本地记录，不能恢复。</p>
         <code>{deletionRequest.confirmation_phrase}</code>

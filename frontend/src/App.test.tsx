@@ -30,6 +30,8 @@ vi.mock("./api", async () => {
       knowledgeCardHistory: vi.fn(),
       storageStatus: vi.fn(),
       backupManifest: vi.fn(),
+      ftsIndexStatus: vi.fn(),
+      rebuildFtsIndex: vi.fn(),
       createAccountDeletionRequest: vi.fn(),
       deleteAccountData: vi.fn(),
       actionItems: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock("./api", async () => {
 });
 
 import { App } from "./App";
-import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
+import { api, LocalApiError, type ActionItem, type ActionItemHistoryEvent, type Contact, type ContactProfileHistoryEvent, type Fact, type FactHistoryEvent, type FtsIndexStatus, type Message, type MessageContext, type PrivacySettings, type SourceStatus, type Tag, type TagLink, type TimelineEvent } from "./api";
 
 const mockedApi = vi.mocked(api);
 
@@ -78,6 +80,7 @@ function renderWithSource(source: SourceStatus, data: {
   tags?: Tag[];
   tagLinks?: TagLink[];
   privacy?: PrivacySettings;
+  ftsIndexStatus?: FtsIndexStatus;
 } = {}) {
   mockedApi.privacySettings.mockResolvedValue(data.privacy ?? { local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
   mockedApi.updatePrivacySettings.mockResolvedValue({ local_processing_acknowledged: true, real_collection_authorized: false, ai_processing_enabled: false, updated_at: "2026-07-24T12:00:00Z" });
@@ -99,6 +102,8 @@ function renderWithSource(source: SourceStatus, data: {
   mockedApi.knowledgeCards.mockResolvedValue([]);
   mockedApi.storageStatus.mockResolvedValue({ account_id: "account-b", contacts: 0, conversations: 0, messages: 0, facts: 0, knowledge_cards: 0, integrity_check: "ok" });
   mockedApi.backupManifest.mockResolvedValue({ account_id: "account-b", generated_at: "2026-07-24T12:00:00Z", integrity_check: "ok", counts: { contacts: 2, conversations: 1, messages: 4, facts: 1, knowledge_cards: 1, action_items: 1, tags: 1 } });
+  mockedApi.ftsIndexStatus.mockResolvedValue(data.ftsIndexStatus ?? { account_id: "account-b", message_count: 0, indexed_message_count: 0, status: "ready" });
+  mockedApi.rebuildFtsIndex.mockResolvedValue({ account_id: "account-b", message_count: 4, indexed_message_count: 4, status: "ready" });
   mockedApi.createAccountDeletionRequest.mockResolvedValue({ id: "deletion-request", account_id: "account-b", confirmation_phrase: "DELETE account-b", expires_at: "2026-07-24T12:10:00Z" });
   mockedApi.deleteAccountData.mockResolvedValue(undefined);
   mockedApi.actionItems.mockResolvedValue([]);
@@ -530,5 +535,15 @@ describe("multi-account sync safety gate", () => {
     expect(deleteButton).toBeEnabled();
     fireEvent.click(deleteButton);
     await waitFor(() => expect(mockedApi.deleteAccountData).toHaveBeenCalledWith("account-b", "deletion-request", "DELETE account-b"));
+  });
+
+  it("shows an incomplete FTS index and rebuilds only the local index without syncing", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }), { ftsIndexStatus: { account_id: "account-b", message_count: 4, indexed_message_count: 3, status: "needs_rebuild" } });
+
+    expect(await screen.findByText(/全文索引：需要重建；原始消息 4，已索引 3/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重建全文索引" }));
+    await waitFor(() => expect(mockedApi.rebuildFtsIndex).toHaveBeenCalledWith("account-b"));
+    expect(mockedApi.sync).not.toHaveBeenCalled();
+    expect(await screen.findByText(/全文索引：正常；原始消息 4，已索引 4/)).toBeInTheDocument();
   });
 });

@@ -63,6 +63,13 @@ class BackupManifestResponse(BaseModel):
     counts: dict[str, int]
 
 
+class FtsIndexStatusResponse(BaseModel):
+    account_id: str
+    message_count: int
+    indexed_message_count: int
+    status: str
+
+
 class AccountDeletionRequestResponse(BaseModel):
     id: str
     account_id: str

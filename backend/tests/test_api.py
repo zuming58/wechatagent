@@ -591,6 +591,28 @@ def test_storage_status_reports_only_requested_account_and_integrity(client):
     assert other.json()["messages"] == 0
 
 
+def test_fts_index_health_and_rebuild_preserve_raw_messages(client):
+    client.post("/api/v1/sync", json={"account_id": "dev-account", "mode": "initial"})
+    ready = client.get("/api/v1/storage/index-status", params={"account_id": "dev-account"})
+    assert ready.json() == {"account_id": "dev-account", "message_count": 5, "indexed_message_count": 5, "status": "ready"}
+
+    with database_session(client) as session:
+        message_id = session.scalar(select(Message.id).where(Message.account_id == "dev-account").order_by(Message.id))
+        session.execute(text("DELETE FROM messages_fts WHERE message_id = :message_id"), {"message_id": message_id})
+        session.commit()
+        assert session.scalar(select(func.count(Message.id)).where(Message.account_id == "dev-account")) == 5
+
+    needs_rebuild = client.get("/api/v1/storage/index-status", params={"account_id": "dev-account"})
+    assert needs_rebuild.json()["status"] == "needs_rebuild"
+    assert needs_rebuild.json()["indexed_message_count"] == 4
+    rebuilt = client.post("/api/v1/storage/rebuild-index", params={"account_id": "dev-account"})
+    assert rebuilt.status_code == 200
+    assert rebuilt.json() == {"account_id": "dev-account", "message_count": 5, "indexed_message_count": 5, "status": "ready"}
+    assert client.get("/api/v1/messages/search", params={"account_id": "dev-account", "q": "离线部署"}).status_code == 200
+    with database_session(client) as session:
+        assert session.scalar(select(func.count(Message.id)).where(Message.account_id == "dev-account")) == 5
+
+
 def test_local_privacy_acknowledgement_is_persisted_without_authorizing_real_collection(client):
     initial = client.get("/api/v1/settings/privacy")
     assert initial.status_code == 200

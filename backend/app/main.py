@@ -6,15 +6,16 @@ from datetime import date, datetime, time, timedelta, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .config import Settings, get_settings
 from .connectors import Connector, SyntheticConnector, WxCliConnector
-from .database import build_engine, get_db, initialize_database
+from .database import build_engine, ensure_messages_fts, get_db, initialize_database
 from .models import Account, AccountDeletionRequest, ActionItem, ActionItemEvidence, ActionItemHistoryEvent, ActionItemHistoryEvidence, Contact, ContactProfileHistoryEvent, Conversation, Fact, FactHistoryEvent, FactHistoryMessageEvidence, FactMessageEvidence, KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardHistoryEvent, KnowledgeCardHistoryEvidence, LocalPrivacySettings, Message, SyncRun, Tag, TagLink
-from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
+from .schemas import AccountDeletionRequestResponse, AccountSummary, ActionItemHistoryResponse, ActionItemResponse, ActionItemWriteRequest, AttachmentSummary, BackupManifestResponse, ContactProfileHistoryResponse, ContactProfileWriteRequest, ContactResponse, FactHistoryResponse, FactResponse, FactWriteRequest, FtsIndexStatusResponse, KnowledgeCardHistoryResponse, KnowledgeCardResponse, KnowledgeCardWriteRequest, MessageContextResponse, MessageSearchItem, PrivacySettingsResponse, PrivacySettingsWriteRequest, SourceStatusResponse, StorageStatusResponse, SyncRequest, SyncRunResponse, SyncScheduleResponse, TagLinkResponse, TagLinkWriteRequest, TagResponse, TagWriteRequest, TimelineEventResponse
 from .services.scheduler import AutomaticSyncScheduler, SyncCoordinator
-from .services.sync import SyncService
+from .services.sync import SyncService, searchable_message_content
 
 
 def build_connector(settings: Settings) -> Connector:
@@ -423,6 +424,46 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
                 "tags": db.scalar(select(func.count(Tag.id)).where(Tag.account_id == account_id)) or 0,
             },
         )
+
+    def fts_index_status(db: Session, account_id: str) -> FtsIndexStatusResponse:
+        message_count = db.scalar(select(func.count(Message.id)).where(Message.account_id == account_id)) or 0
+        try:
+            indexed_message_count = db.execute(text("SELECT count(*) FROM messages_fts WHERE account_id = :account_id"), {"account_id": account_id}).scalar() or 0
+        except OperationalError:
+            return FtsIndexStatusResponse(account_id=account_id, message_count=message_count, indexed_message_count=0, status="unavailable")
+        return FtsIndexStatusResponse(
+            account_id=account_id,
+            message_count=message_count,
+            indexed_message_count=indexed_message_count,
+            status="ready" if message_count == indexed_message_count else "needs_rebuild",
+        )
+
+    @app.get("/api/v1/storage/index-status", response_model=FtsIndexStatusResponse)
+    def get_fts_index_status(account_id: str, db: Session = Depends(get_db)) -> FtsIndexStatusResponse:
+        return fts_index_status(db, account_id)
+
+    @app.post("/api/v1/storage/rebuild-index", response_model=FtsIndexStatusResponse)
+    def rebuild_fts_index(account_id: str, db: Session = Depends(get_db)) -> FtsIndexStatusResponse:
+        connection = db.connection()
+        ensure_messages_fts(connection)
+        rows = db.execute(text("SELECT id, conversation_id, text_content, attachment_metadata FROM messages WHERE account_id = :account_id"), {"account_id": account_id}).mappings().all()
+        db.execute(text("DELETE FROM messages_fts WHERE account_id = :account_id"), {"account_id": account_id})
+        for row in rows:
+            try:
+                attachment_metadata = json.loads(row["attachment_metadata"]) if row["attachment_metadata"] else None
+            except (TypeError, json.JSONDecodeError):
+                attachment_metadata = None
+            db.execute(
+                text("INSERT INTO messages_fts(message_id, account_id, conversation_id, text_content) VALUES (:id, :account_id, :conversation_id, :text_content)"),
+                {
+                    "id": row["id"],
+                    "account_id": account_id,
+                    "conversation_id": row["conversation_id"],
+                    "text_content": searchable_message_content(row["text_content"], attachment_metadata),
+                },
+            )
+        db.commit()
+        return fts_index_status(db, account_id)
 
     @app.post("/api/v1/accounts/{account_id}/deletion-requests", response_model=AccountDeletionRequestResponse, status_code=201)
     def create_account_deletion_request(account_id: str, db: Session = Depends(get_db)) -> AccountDeletionRequestResponse:

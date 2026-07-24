@@ -84,6 +84,7 @@ export type KnowledgeCard = { id: string; account_id: string; card_type: Knowled
 export type KnowledgeCardHistoryEvent = { id: string; account_id: string; card_id: string; event_type: "created" | "updated" | "deleted"; card_type: KnowledgeCardType; title: string; content: string; occurred_at: string; evidence: Message[] };
 export type StorageStatus = { account_id: string; contacts: number; conversations: number; messages: number; facts: number; knowledge_cards: number; integrity_check: string };
 export type BackupManifest = { account_id: string; generated_at: string; integrity_check: string; counts: Record<string, number> };
+export type FtsIndexStatus = { account_id: string; message_count: number; indexed_message_count: number; status: "ready" | "needs_rebuild" | "unavailable" };
 export type AccountDeletionRequest = { id: string; account_id: string; confirmation_phrase: string; expires_at: string };
 export type PrivacySettings = { local_processing_acknowledged: boolean; real_collection_authorized: boolean; ai_processing_enabled: boolean; updated_at?: string | null };
 export type ActionItem = { id: string; account_id: string; content: string; status: "open" | "done"; due_at?: string | null; created_at: string; updated_at: string; evidence: Message[] };
@@ -128,6 +129,8 @@ export const api = {
   knowledgeCardHistory: (cardId: string, accountId: string) => request<KnowledgeCardHistoryEvent[]>(`/knowledge-cards/${encodeURIComponent(cardId)}/history?account_id=${encodeURIComponent(accountId)}`),
   storageStatus: (accountId: string) => request<StorageStatus>(`/storage/status?account_id=${encodeURIComponent(accountId)}`),
   backupManifest: (accountId: string) => request<BackupManifest>(`/storage/backup-manifest?account_id=${encodeURIComponent(accountId)}`),
+  ftsIndexStatus: (accountId: string) => request<FtsIndexStatus>(`/storage/index-status?account_id=${encodeURIComponent(accountId)}`),
+  rebuildFtsIndex: (accountId: string) => request<FtsIndexStatus>(`/storage/rebuild-index?account_id=${encodeURIComponent(accountId)}`, { method: "POST" }),
   createAccountDeletionRequest: (accountId: string) => request<AccountDeletionRequest>(`/accounts/${encodeURIComponent(accountId)}/deletion-requests`, { method: "POST" }),
   deleteAccountData: (accountId: string, requestId: string, confirmation: string) => request<void>(`/accounts/${encodeURIComponent(accountId)}/data?request_id=${encodeURIComponent(requestId)}&confirmation=${encodeURIComponent(confirmation)}`, { method: "DELETE" }),
   actionItems: (accountId: string, status?: "open" | "done") => request<ActionItem[]>(`/action-items?account_id=${encodeURIComponent(accountId)}${status ? `&status=${status}` : ""}`),

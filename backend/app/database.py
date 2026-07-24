@@ -11,6 +11,18 @@ class Base(DeclarativeBase):
     pass
 
 
+def ensure_messages_fts(connection) -> None:
+    connection.execute(text("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            message_id UNINDEXED,
+            account_id UNINDEXED,
+            conversation_id UNINDEXED,
+            text_content,
+            tokenize = 'trigram'
+        )
+    """))
+
+
 def build_engine(database_url: str | None = None) -> Engine:
     url = database_url or get_settings().database_url
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
@@ -38,15 +50,7 @@ def initialize_database(target_engine: Engine | None = None) -> None:
     current_engine = target_engine or engine
     Base.metadata.create_all(current_engine)
     with current_engine.begin() as connection:
-        connection.execute(text("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                message_id UNINDEXED,
-                account_id UNINDEXED,
-                conversation_id UNINDEXED,
-                text_content,
-                tokenize = 'trigram'
-            )
-        """))
+        ensure_messages_fts(connection)
 
 
 def get_db() -> Generator[Session, None, None]:
