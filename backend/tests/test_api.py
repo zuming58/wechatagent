@@ -812,3 +812,35 @@ def test_alembic_upgrades_a_temporary_database_to_current_head(tmp_path):
         assert {"accounts", "facts", "knowledge_cards", "action_items", "tags", "account_deletion_requests", "local_privacy_settings"}.issubset(set(inspect(engine).get_table_names()))
     finally:
         engine.dispose()
+
+
+def test_database_initialization_repairs_legacy_contact_profile_columns(tmp_path):
+    database_path = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{database_path}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("""
+                CREATE TABLE contacts (
+                    id VARCHAR(96) PRIMARY KEY,
+                    account_id VARCHAR(64) NOT NULL,
+                    source_id VARCHAR(255) NOT NULL,
+                    remark_name VARCHAR(255),
+                    nickname VARCHAR(255),
+                    confirmed_real_name VARCHAR(255),
+                    company VARCHAR(255),
+                    role VARCHAR(255),
+                    avatar_ref TEXT,
+                    avatar_version VARCHAR(128),
+                    avatar_updated_at DATETIME,
+                    last_message_at DATETIME
+                )
+            """))
+        from app.database import initialize_database
+
+        initialize_database(engine)
+
+        columns = {column["name"] for column in inspect(engine).get_columns("contacts")}
+        assert {"user_remark_name", "user_confirmed_real_name", "user_company", "user_role"}.issubset(columns)
+        assert engine.connect().execute(text("SELECT version_num FROM alembic_version")).scalar() == "0010_local_privacy_settings"
+    finally:
+        engine.dispose()

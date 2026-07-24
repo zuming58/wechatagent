@@ -1,6 +1,9 @@
 from collections.abc import Generator
+from pathlib import Path
 
-from sqlalchemy import create_engine, event, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -21,6 +24,33 @@ def ensure_messages_fts(connection) -> None:
             tokenize = 'trigram'
         )
     """))
+
+
+def ensure_legacy_contact_profile_columns(connection) -> None:
+    """Repair databases created before profile overrides were versioned."""
+    if connection.dialect.name != "sqlite":
+        return
+    columns = {row["name"] for row in connection.execute(text("PRAGMA table_info(contacts)")).mappings()}
+    for column in (
+        "user_remark_name",
+        "user_confirmed_real_name",
+        "user_company",
+        "user_role",
+    ):
+        if column not in columns:
+            connection.execute(text(f"ALTER TABLE contacts ADD COLUMN {column} VARCHAR(255)"))
+
+
+def alembic_config(database_url: str) -> Config:
+    backend_root = Path(__file__).resolve().parent.parent
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def supports_alembic(target_engine: Engine) -> bool:
+    return not (target_engine.url.drivername.startswith("sqlite") and target_engine.url.database is None)
 
 
 def build_engine(database_url: str | None = None) -> Engine:
@@ -48,9 +78,16 @@ def initialize_database(target_engine: Engine | None = None) -> None:
     from . import models  # noqa: F401
 
     current_engine = target_engine or engine
+    database_url = str(current_engine.url)
+    has_version_table = inspect(current_engine).has_table("alembic_version")
+    if has_version_table and supports_alembic(current_engine):
+        command.upgrade(alembic_config(database_url), "head")
     Base.metadata.create_all(current_engine)
     with current_engine.begin() as connection:
+        ensure_legacy_contact_profile_columns(connection)
         ensure_messages_fts(connection)
+    if not has_version_table and supports_alembic(current_engine):
+        command.stamp(alembic_config(database_url), "head")
 
 
 def get_db() -> Generator[Session, None, None]:
