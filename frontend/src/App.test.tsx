@@ -483,6 +483,17 @@ describe("multi-account sync safety gate", () => {
     expect(await screen.findByRole("heading", { name: "消息上下文" })).toBeInTheDocument();
   });
 
+  it("confirms when a global search has no matching archived message", async () => {
+    renderWithSource(sourceStatus({ accounts: [{ id: "account-b", display_name: "Synthetic Account B", selected: true }] }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "全局搜索" }));
+    fireEvent.change(screen.getByPlaceholderText("输入关键词后按 Enter"), { target: { value: "方案" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+
+    await waitFor(() => expect(mockedApi.search).toHaveBeenCalledWith("account-b", "方案", {}));
+    expect(await screen.findByRole("status")).toHaveTextContent("未找到包含“方案”的已归档原文。");
+  });
+
   it("opens the read-only timeline, filters it by the selected contact, and opens source context", async () => {
     const contact = { id: "contact-zhang", display_name: "Synthetic Contact", last_message_at: null };
     const message = { id: "timeline-message", conversation_id: "group-1", conversation_name: "Synthetic Group", conversation_type: "group", sender_display_name: "Synthetic Contact", sent_at: "2026-07-23T12:00:00Z", message_type: "text", text_content: "Timeline source", snippet: "Timeline source" };

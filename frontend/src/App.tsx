@@ -76,6 +76,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFilters, setSearchFilters] = useState<MessageSearchFilters>({});
   const [results, setResults] = useState<Message[]>([]);
+  const [searchState, setSearchState] = useState<"idle" | "loading" | "complete" | "error">("idle");
   const [evidence, setEvidence] = useState<Message[]>([]);
   const [facts, setFacts] = useState<Fact[]>([]);
   const [factHistory, setFactHistory] = useState<FactHistoryEvent[]>([]);
@@ -317,8 +318,15 @@ export function App() {
 
   async function search() {
     if (!accountId || !searchQuery.trim()) return;
-    try { setResults(await api.search(accountId, searchQuery.trim(), searchFilters)); }
-    catch { setNotice("搜索失败；请先完成首次归档。"); }
+    setSearchState("loading");
+    setResults([]);
+    try {
+      setResults(await api.search(accountId, searchQuery.trim(), searchFilters));
+      setSearchState("complete");
+    } catch {
+      setSearchState("error");
+      setNotice("搜索失败；请先完成首次归档。");
+    }
   }
 
   async function showContext(message: Message) {
@@ -659,9 +667,9 @@ export function App() {
     <header className="card-heading"><h2><MagnifyingGlass weight="bold" />全局搜索</h2><span className="search-scope">当前账号全部已归档消息</span></header>
     <p>只搜索本机已归档的原文。默认跨联系人；勾选后才限制为当前联系人。</p>
     <div className="search-results">
-      <label className="inline-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search} disabled={!accountId || !searchQuery.trim()}>搜索</button></label>
+      <label className="inline-search"><input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setResults([]); setSearchState("idle"); }} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="输入关键词后按 Enter" /><button className="link" onClick={search} disabled={!accountId || !searchQuery.trim() || searchState === "loading"}>{searchState === "loading" ? "搜索中…" : "搜索"}</button></label>
       <div className="search-filters"><label>消息类型<select value={searchFilters.message_type ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, message_type: event.target.value || undefined })}><option value="">全部</option><option value="text">文本</option><option value="file">文件</option><option value="link">链接</option><option value="image">图片</option><option value="voice">语音</option></select></label><label>开始日期<input type="date" value={searchFilters.date_from ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, date_from: event.target.value || undefined })} /></label><label>结束日期<input type="date" value={searchFilters.date_to ?? ""} onChange={(event) => setSearchFilters({ ...searchFilters, date_to: event.target.value || undefined })} /></label><label className="search-check"><input type="checkbox" checked={Boolean(searchFilters.contact_id)} disabled={!selected} onChange={(event) => setSearchFilters({ ...searchFilters, contact_id: event.target.checked ? selected?.id : undefined })} />当前联系人</label><label className="search-check"><input type="checkbox" checked={Boolean(searchFilters.has_attachment)} onChange={(event) => setSearchFilters({ ...searchFilters, has_attachment: event.target.checked || undefined })} />仅含附件</label></div>
-      {!accountId ? <p className="empty-message">请先明确选择本地账号，再搜索已归档原文。</p> : messageRows(results, "输入关键词后可查看跨会话原文命中与上下文。", Boolean(searchFilters.contact_id))}
+      {!accountId ? <p className="empty-message">请先明确选择本地账号，再搜索已归档原文。</p> : searchState === "loading" ? <p className="empty-message" role="status">正在搜索已归档原文…</p> : searchState === "error" ? <p className="empty-message" role="status">搜索失败，请确认本地服务状态后重试。</p> : searchState === "complete" && !results.length ? <p className="empty-message" role="status">未找到包含“{searchQuery.trim()}”的已归档原文。</p> : messageRows(results, "输入关键词后可查看跨会话原文命中与上下文。", Boolean(searchFilters.contact_id))}
     </div>
   </section>;
 
