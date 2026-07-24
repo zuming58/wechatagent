@@ -165,7 +165,7 @@ def test_idempotent_import_and_search_context(client):
 
 def test_browser_cors_allows_local_write_methods(client):
     headers = {
-        "Origin": "http://127.0.0.1:5173",
+        "Origin": "http://127.0.0.1:5181",
         "Access-Control-Request-Method": "PATCH",
         "Access-Control-Request-Headers": "content-type",
     }

@@ -22,7 +22,7 @@ def client() -> Generator[TestClient, None, None]:
         settings = Settings(
             database_url=f"sqlite:///{database_path}",
             connector="synthetic",
-            allowed_origin="http://127.0.0.1:5173",
+            allowed_origin="http://127.0.0.1:5181",
         )
         app = create_app(settings=settings, connector=SyntheticConnector())
         app.state.testing_session_factory = TestingSession

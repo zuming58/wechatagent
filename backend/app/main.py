@@ -293,7 +293,7 @@ def create_app(settings: Settings | None = None, connector: Connector | None = N
     # the workbench's local editing and deletion flows.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=sorted({current_settings.allowed_origin, "http://127.0.0.1:5173"}),
+        allow_origins=sorted({current_settings.allowed_origin, "http://127.0.0.1:5181"}),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],

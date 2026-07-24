@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     sync_overlap_seconds: int = 300
     auto_sync_enabled: bool = True
     auto_sync_interval_seconds: int = 300
-    allowed_origin: str = "http://127.0.0.1:5173"
+    allowed_origin: str = "http://127.0.0.1:5181"
 
     def ensure_data_directory(self) -> None:
         if self.database_url.startswith("sqlite:///./"):
