@@ -34,11 +34,67 @@ class WxCliConnector(Connector):
         return sorted(directories, key=lambda path: path.stat().st_mtime, reverse=True)
 
     @staticmethod
-    def _wechat_version() -> str | None:
+    def _registry_install_locations() -> list[Path]:
+        if platform.system() != "Windows":
+            return []
+        try:
+            import winreg
+        except ImportError:
+            return []
+        locations: list[Path] = []
+        roots = (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE)
+        paths = (r"Software\Microsoft\Windows\CurrentVersion\Uninstall", r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+        for root in roots:
+            for path in paths:
+                try:
+                    parent = winreg.OpenKey(root, path)
+                except OSError:
+                    continue
+                try:
+                    index = 0
+                    while True:
+                        try:
+                            name = winreg.EnumKey(parent, index)
+                            index += 1
+                        except OSError:
+                            break
+                        try:
+                            entry = winreg.OpenKey(parent, name)
+                            display_name, _ = winreg.QueryValueEx(entry, "DisplayName")
+                            install_location, _ = winreg.QueryValueEx(entry, "InstallLocation")
+                        except OSError:
+                            continue
+                        if isinstance(display_name, str) and ("WeChat" in display_name or "微信" in display_name) and isinstance(install_location, str) and install_location:
+                            locations.append(Path(install_location))
+                finally:
+                    winreg.CloseKey(parent)
+        return locations
+
+    @classmethod
+    def _wechat_executables(cls) -> list[Path]:
+        standard = [
+            Path("C:/Program Files/Tencent/Weixin/Weixin.exe"),
+            Path("C:/Program Files (x86)/Tencent/Weixin/Weixin.exe"),
+            Path("C:/Program Files/Tencent/WeChat/WeChat.exe"),
+            Path("C:/Program Files (x86)/Tencent/WeChat/WeChat.exe"),
+        ]
+        candidates = list(standard)
+        for location in cls._registry_install_locations():
+            for executable in ("WeChat.exe", "Weixin.exe"):
+                candidates.append(location / executable)
+                try:
+                    candidates.extend(location.glob(f"*/{executable}"))
+                except OSError:
+                    continue
+        seen: set[Path] = set()
+        return [path for path in candidates if path.exists() and not (path in seen or seen.add(path))]
+
+    @classmethod
+    def _wechat_version(cls) -> str | None:
         if platform.system() != "Windows":
             return None
-        executable = Path("C:/Program Files/Tencent/Weixin/Weixin.exe")
-        if not executable.exists():
+        executable = next(iter(cls._wechat_executables()), None)
+        if executable is None:
             return None
         escaped = str(executable).replace("'", "''")
         result = subprocess.run(
@@ -91,19 +147,19 @@ class WxCliConnector(Connector):
                 wechat_version=self._wechat_version(),
                 accounts=accounts,
                 reason="wx-cli is not installed or not on PATH",
-                requires_elevation=True,
+                requires_elevation=False,
             )
 
         try:
             payload = self._run_json("daemon", "status", timeout=20)
         except PermissionError as error:
-            return SourceProbe(status="permission_denied", accounts=accounts, reason=str(error), requires_elevation=True)
+            return SourceProbe(status="permission_denied", accounts=accounts, reason=str(error), requires_elevation=False)
         except json.JSONDecodeError as error:
-            return SourceProbe(status="connector_protocol_error", accounts=accounts, reason=str(error), requires_elevation=True)
+            return SourceProbe(status="connector_protocol_error", accounts=accounts, reason=str(error), requires_elevation=False)
         except RuntimeError as error:
             error_code = str(error)
             status = error_code if error_code == "connector_missing" else "connector_command_failed"
-            return SourceProbe(status=status, accounts=accounts, reason=error_code, requires_elevation=True)
+            return SourceProbe(status=status, accounts=accounts, reason=error_code, requires_elevation=False)
         connector_version = str(payload.get("version", "installed")) if isinstance(payload, dict) else "installed"
 
         status = "account_selection_required" if len(accounts) != 1 else "ready"
@@ -114,7 +170,7 @@ class WxCliConnector(Connector):
             wechat_version=self._wechat_version(),
             connector_version=connector_version,
             accounts=accounts,
-            requires_elevation=True,
+            requires_elevation=False,
         )
 
     @staticmethod

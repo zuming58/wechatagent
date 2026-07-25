@@ -52,6 +52,21 @@ def test_probe_missing_connector_keeps_anonymous_stable_account_ids(monkeypatch,
     assert first.accounts[0].id == second.accounts[0].id
     assert first.accounts[0].id == connector._stable_id(str(directory.resolve()).lower())
     assert str(directory) not in " ".join((first.accounts[0].id, first.accounts[0].source_key, first.accounts[0].display_name))
+    assert first.requires_elevation is False
+
+
+def test_wechat_version_uses_an_installed_registry_location_without_returning_the_path(monkeypatch, tmp_path):
+    executable = tmp_path / "3.9.0.28" / "WeChat.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    calls = []
+    monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
+    monkeypatch.setattr(WxCliConnector, "_registry_install_locations", staticmethod(lambda: [tmp_path]))
+    monkeypatch.setattr("app.connectors.wx_cli.subprocess.run", lambda args, **_kwargs: calls.append(args) or SimpleNamespace(stdout="3.7.6.44\n"))
+
+    assert WxCliConnector._wechat_version() == "3.7.6.44"
+    assert any("VersionInfo.FileVersion" in value for value in calls[0])
+    assert str(tmp_path) in " ".join(calls[0])
 
 
 def test_probe_selects_only_a_single_detected_account(monkeypatch, tmp_path):
