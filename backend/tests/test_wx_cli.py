@@ -61,12 +61,38 @@ def test_wechat_version_uses_an_installed_registry_location_without_returning_th
     executable.touch()
     calls = []
     monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
+    monkeypatch.setattr(WxCliConnector, "_running_wechat_version", staticmethod(lambda: None))
     monkeypatch.setattr(WxCliConnector, "_registry_install_locations", staticmethod(lambda: [tmp_path]))
     monkeypatch.setattr("app.connectors.wx_cli.subprocess.run", lambda args, **_kwargs: calls.append(args) or SimpleNamespace(stdout="3.7.6.44\n"))
 
     assert WxCliConnector._wechat_version() == "3.7.6.44"
     assert any("VersionInfo.FileVersion" in value for value in calls[0])
     assert str(tmp_path) in " ".join(calls[0])
+
+
+def test_wechat_version_prefers_the_running_weixin_process(monkeypatch):
+    monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
+    monkeypatch.setattr(WxCliConnector, "_running_wechat_version", staticmethod(lambda: "4.1.12.24"))
+    monkeypatch.setattr(
+        WxCliConnector,
+        "_wechat_executables",
+        classmethod(lambda _cls: (_ for _ in ()).throw(AssertionError("must not use an older installed version"))),
+    )
+
+    assert WxCliConnector._wechat_version() == "4.1.12.24"
+
+
+def test_running_wechat_version_checks_weixin_before_legacy_wechat(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "app.connectors.wx_cli.subprocess.run",
+        lambda args, **_kwargs: calls.append(args) or SimpleNamespace(stdout="4.1.12.24\n"),
+    )
+
+    assert WxCliConnector._running_wechat_version() == "4.1.12.24"
+    command = " ".join(calls[0])
+    assert command.index("-Name Weixin") < command.index("-Name WeChat")
 
 
 def test_probe_selects_only_a_single_detected_account(monkeypatch, tmp_path):

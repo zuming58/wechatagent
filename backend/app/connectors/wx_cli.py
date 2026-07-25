@@ -89,10 +89,33 @@ class WxCliConnector(Connector):
         seen: set[Path] = set()
         return [path for path in candidates if path.exists() and not (path in seen or seen.add(path))]
 
+    @staticmethod
+    def _running_wechat_version() -> str | None:
+        if platform.system() != "Windows":
+            return None
+        script = (
+            "$process = Get-Process -Name Weixin -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Path } | Select-Object -First 1; "
+            "if (-not $process) { $process = Get-Process -Name WeChat -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Path } | Select-Object -First 1 }; "
+            "if ($process) { (Get-Item -LiteralPath $process.Path).VersionInfo.FileVersion }"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return result.stdout.strip() or None
+
     @classmethod
     def _wechat_version(cls) -> str | None:
         if platform.system() != "Windows":
             return None
+        running_version = cls._running_wechat_version()
+        if running_version:
+            return running_version
         executable = next(iter(cls._wechat_executables()), None)
         if executable is None:
             return None
