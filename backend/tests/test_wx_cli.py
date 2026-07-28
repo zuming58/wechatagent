@@ -62,6 +62,7 @@ def test_wechat_version_uses_an_installed_registry_location_without_returning_th
     calls = []
     monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
     monkeypatch.setattr(WxCliConnector, "_running_wechat_version", staticmethod(lambda: None))
+    monkeypatch.setattr(WxCliConnector, "_standard_install_executables", staticmethod(lambda: []))
     monkeypatch.setattr(WxCliConnector, "_registry_install_locations", staticmethod(lambda: [tmp_path]))
     monkeypatch.setattr("app.connectors.wx_cli.subprocess.run", lambda args, **_kwargs: calls.append(args) or SimpleNamespace(stdout="3.7.6.44\n"))
 

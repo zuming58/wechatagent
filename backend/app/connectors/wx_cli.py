@@ -70,15 +70,18 @@ class WxCliConnector(Connector):
                     winreg.CloseKey(parent)
         return locations
 
-    @classmethod
-    def _wechat_executables(cls) -> list[Path]:
-        standard = [
+    @staticmethod
+    def _standard_install_executables() -> list[Path]:
+        return [
             Path("C:/Program Files/Tencent/Weixin/Weixin.exe"),
             Path("C:/Program Files (x86)/Tencent/Weixin/Weixin.exe"),
             Path("C:/Program Files/Tencent/WeChat/WeChat.exe"),
             Path("C:/Program Files (x86)/Tencent/WeChat/WeChat.exe"),
         ]
-        candidates = list(standard)
+
+    @classmethod
+    def _wechat_executables(cls) -> list[Path]:
+        candidates = list(cls._standard_install_executables())
         for location in cls._registry_install_locations():
             for executable in ("WeChat.exe", "Weixin.exe"):
                 candidates.append(location / executable)
