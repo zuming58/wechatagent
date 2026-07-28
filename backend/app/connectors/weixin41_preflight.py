@@ -11,18 +11,20 @@ from __future__ import annotations
 import csv
 import ctypes
 import ctypes.wintypes as wintypes
+import hashlib
 import platform
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .weixin41_pe import PeAnchorReport, analyze_pe
+from .weixin41_pe import PeAnalysisError, PeAnchorReport, analyze_pe_bytes, select_capture_hook_rva
 from .wx_cli import WxCliConnector
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_VM_READ = 0x0010
 LIST_MODULES_64BIT = 0x02
 ERROR_ACCESS_DENIED = 5
+SUPPORTED_VERSION = "4.1.12.24"
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,27 @@ class ProcessPreflight:
     handle_opened: bool
     header_readable: bool
     pe_report: PeAnchorReport | None
+    module_sha256: str | None = None
     error_code: str | None = None
+
+    @property
+    def capture_ready(self) -> bool:
+        if not (
+            self.image_version == SUPPORTED_VERSION
+            and self.image_path_available
+            and self.handle_opened
+            and self.header_readable
+            and self.pe_report is not None
+            and self.module_sha256
+            and len(self.module_sha256) == 64
+            and self.error_code is None
+        ):
+            return False
+        try:
+            select_capture_hook_rva(self.pe_report)
+        except PeAnalysisError:
+            return False
+        return True
 
 
 class MODULEINFO(ctypes.Structure):
@@ -133,11 +155,63 @@ def _find_weixin_dll(image_path: Path, version: str | None) -> Path | None:
     candidates = [image_path.parent / "Weixin.dll"]
     if version:
         candidates.insert(0, image_path.parent / version / "Weixin.dll")
-    return next((candidate for candidate in candidates if candidate.exists()), None)
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
 def _close(handle: int) -> None:
-    ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
+    close_handle = ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    close_handle(handle)
+
+
+def _inspect_open_process(pid: int, handle: int) -> ProcessPreflight:
+    image_path = _query_image_path(handle)
+    image_path_available = bool(image_path and image_path.is_file())
+    try:
+        version = WxCliConnector._executable_version(image_path) if image_path else None
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    module_path = _find_weixin_dll(image_path, version) if image_path_available and image_path else None
+    report = None
+    module_sha256 = None
+    module_error = None
+    readable = _read_module_header(handle, "Weixin.exe")
+    if module_path:
+        try:
+            module_bytes = module_path.read_bytes()
+            module_sha256 = hashlib.sha256(module_bytes).hexdigest()
+            report = analyze_pe_bytes(module_bytes)
+            select_capture_hook_rva(report)
+        except PeAnalysisError as error:
+            module_error = error.error_code
+        except (OSError, ValueError):
+            module_error = "module_analysis_failed"
+
+    error_code = None
+    if not image_path_available:
+        error_code = "image_path_unavailable"
+    elif not readable:
+        error_code = "process_header_unreadable"
+    elif version is None:
+        error_code = "version_unavailable"
+    elif version != SUPPORTED_VERSION:
+        error_code = "unsupported_version"
+    elif module_path is None:
+        error_code = "module_missing"
+    elif module_error:
+        error_code = module_error
+    return ProcessPreflight(
+        pid=pid,
+        image_name="Weixin.exe",
+        image_version=version,
+        image_path_available=image_path_available,
+        handle_opened=True,
+        header_readable=readable,
+        pe_report=report,
+        module_sha256=module_sha256,
+        error_code=error_code,
+    )
 
 
 def preflight_pid(pid: int) -> ProcessPreflight:
@@ -150,26 +224,18 @@ def preflight_pid(pid: int) -> ProcessPreflight:
     handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, pid)
     if not handle:
         error = ctypes.get_last_error()
-        return ProcessPreflight(pid, "Weixin.exe", None, False, False, False, None, f"win32:{error}")
-    try:
-        image_path = _query_image_path(handle)
-        report = None
-        readable = _read_module_header(handle, "Weixin.exe")
-        version = WxCliConnector._wechat_version()
-        if image_path and image_path.exists():
-            module_path = _find_weixin_dll(image_path, version)
-            if module_path:
-                report = analyze_pe(module_path)
         return ProcessPreflight(
-            pid,
-            "Weixin.exe",
-            version,
-            image_path is not None,
-            True,
-            readable,
-            report,
-            None if readable else f"win32:{ctypes.get_last_error()}",
+            pid=pid,
+            image_name="Weixin.exe",
+            image_version=None,
+            image_path_available=False,
+            handle_opened=False,
+            header_readable=False,
+            pe_report=None,
+            error_code=f"win32:{error}",
         )
+    try:
+        return _inspect_open_process(pid, handle)
     finally:
         _close(handle)
 
@@ -187,12 +253,12 @@ def main() -> int:
         report = result.pe_report
         print(
             "WEIXIN_PREFLIGHT="
-            f"pid={result.pid};handle={result.handle_opened};header={result.header_readable};"
+            f"pid={result.pid};ready={result.capture_ready};handle={result.handle_opened};header={result.header_readable};"
             f"x64={bool(report and report.is_x64)};anchors={len(report.anchor_rvas) if report else 0};"
             f"refs={len(report.rip_relative_reference_rvas) if report else 0};"
             f"candidates={len(report.candidate_function_rvas) if report else 0};error={result.error_code or 'none'}"
         )
-    return 0 if all(item.header_readable for item in results) else 3
+    return 0 if all(item.capture_ready for item in results) else 3
 
 
 if __name__ == "__main__":

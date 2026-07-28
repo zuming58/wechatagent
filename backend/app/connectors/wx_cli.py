@@ -109,15 +109,9 @@ class WxCliConnector(Connector):
         )
         return result.stdout.strip() or None
 
-    @classmethod
-    def _wechat_version(cls) -> str | None:
-        if platform.system() != "Windows":
-            return None
-        running_version = cls._running_wechat_version()
-        if running_version:
-            return running_version
-        executable = next(iter(cls._wechat_executables()), None)
-        if executable is None:
+    @staticmethod
+    def _executable_version(executable: Path) -> str | None:
+        if platform.system() != "Windows" or not executable.is_file():
             return None
         escaped = str(executable).replace("'", "''")
         result = subprocess.run(
@@ -128,6 +122,18 @@ class WxCliConnector(Connector):
             check=False,
         )
         return result.stdout.strip() or None
+
+    @classmethod
+    def _wechat_version(cls) -> str | None:
+        if platform.system() != "Windows":
+            return None
+        running_version = cls._running_wechat_version()
+        if running_version:
+            return running_version
+        executable = next(iter(cls._wechat_executables()), None)
+        if executable is None:
+            return None
+        return cls._executable_version(executable)
 
     def _run_json(self, *args: str, timeout: int = 120) -> dict[str, Any] | list[Any]:
         executable = shutil.which(self.command)

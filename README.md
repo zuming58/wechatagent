@@ -54,6 +54,7 @@ npm run dev
 - [开发实施文档](docs/DEVELOPMENT_PLAN.md)
 - [UI Demo 视觉方向定稿](docs/UI_DIRECTION.md)
 - [Codex × Hermes 本地交接协议](docs/HERMES_HANDOFF.md)
+- [跨机器续开发交接](docs/WORKSTATION_HANDOFF_2026-07-28.md)
 - [技术可行性分析](docs/technical-feasibility.md)
 
 ## 重要边界

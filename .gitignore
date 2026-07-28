@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+.coverage
 .venv/
 *.egg-info/
 

@@ -82,6 +82,21 @@ def test_wechat_version_prefers_the_running_weixin_process(monkeypatch):
     assert WxCliConnector._wechat_version() == "4.1.12.24"
 
 
+def test_executable_version_reads_the_explicit_process_image(monkeypatch, tmp_path):
+    executable = tmp_path / "target-version" / "Weixin.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    calls = []
+    monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "app.connectors.wx_cli.subprocess.run",
+        lambda args, **_kwargs: calls.append(args) or SimpleNamespace(stdout="4.1.12.24\n"),
+    )
+
+    assert WxCliConnector._executable_version(executable) == "4.1.12.24"
+    assert str(executable) in " ".join(calls[0])
+
+
 def test_running_wechat_version_checks_weixin_before_legacy_wechat(monkeypatch):
     calls = []
     monkeypatch.setattr("app.connectors.wx_cli.platform.system", lambda: "Windows")
