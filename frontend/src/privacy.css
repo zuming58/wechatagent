@@ -1,0 +1,36 @@
+.privacy-onboarding {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px;
+  background: #f5f6f8;
+}
+
+.privacy-onboarding > section {
+  display: grid;
+  width: min(580px, 100%);
+  gap: 14px;
+  border: 1px solid #dbe8f8;
+  border-radius: 8px;
+  background: #fff;
+  padding: 28px;
+}
+
+.privacy-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 8px; background: #eaf3ff; color: #1677ff; }
+.privacy-eyebrow { margin: 0; color: #3974b7; font-size: 11px; font-weight: 700; }
+.privacy-onboarding h1 { margin: 0; color: #27364d; font-size: 22px; font-weight: 760; letter-spacing: 0; }
+.privacy-onboarding p { margin: 0; color: #5f7188; font-size: 12px; line-height: 1.75; }
+.privacy-check { display: flex; align-items: flex-start; gap: 8px; color: #425e7b; font-size: 12px; line-height: 1.55; }
+.privacy-check input { margin: 3px 0 0; }
+.privacy-error { color: #a65d1a !important; }
+.privacy-onboarding .primary { justify-self: start; height: 34px; border-radius: 7px; padding: 0 12px; font-size: 11px; cursor: pointer; }
+.privacy-onboarding .primary:disabled { opacity: .5; cursor: not-allowed; }
+
+.privacy-settings { grid-column: 1 / -1; background: #f8fbff; border-color: #dbe8f8; }
+.privacy-settings h2 svg { color: #1677ff; }
+.privacy-settings > p { margin: 7px 0 0; }
+.privacy-settings dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0 0; }
+.privacy-settings dl > div { display: grid; gap: 4px; border: 1px solid #dbe8f8; border-radius: 7px; background: #fff; padding: 10px; }
+.privacy-settings dt { color: #7a8698; font-size: 9px; }
+.privacy-settings dd { display: grid; gap: 3px; margin: 0; color: #344054; font-size: 11px; }
+.privacy-settings small { color: #7a8698; font-size: 9px; }

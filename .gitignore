@@ -1,7 +1,9 @@
 # Python
 __pycache__/
 *.py[cod]
+.coverage
 .venv/
+*.egg-info/
 
 # Node
 node_modules/
@@ -27,3 +29,6 @@ Thumbs.db
 
 # WorkBuddy local state
 .workbuddy/
+
+# Local preview process output
+.preview-*.log
